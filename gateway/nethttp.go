@@ -114,11 +114,11 @@ func (s *NetHTTPServer) ListenAndServe(ctx context.Context, addr string) error {
 }
 
 func (s *NetHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
-	if !strings.HasPrefix(r.URL.Path, "/rpc/") && r.URL.Path != "/health" {
-		http.NotFound(w, r)
-		return
-	}
-
+	// Forward EVERY path to the gateway — not just /rpc/ + /health. A
+	// RouteHandler plugin can claim any prefix (e.g. a static-file plugin
+	// mounted at "/" serving a SPA), so the adapter must not pre-filter or
+	// those routes never reach dispatch. The gateway returns a proper 404
+	// for genuinely-unhandled paths.
 	body, err := bodyFromReader(http.MaxBytesReader(w, r.Body, s.opts.MaxBodyBytes), s.opts.MaxBodyBytes)
 	if err != nil {
 		http.Error(w, "request too large", http.StatusRequestEntityTooLarge)

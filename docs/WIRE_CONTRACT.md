@@ -19,7 +19,7 @@ pod against this contract with `sov conform` (see [§8](#8-conformance)).
 - Transport is HTTP/1.1. Bodies are JSON (`Content-Type: application/json`).
 - Every RPC path is `POST /rpc/{router}/{method}`. Framework endpoints (`_health`, `_introspect`,
   `_batch`, `_register`) live under `/rpc/_*` and accept `GET` or `POST` except `_register`/`_batch`
-  which are `POST`.
+  which are `POST`. `_introspect` is **opt-in** (off by default → 404; see [§5](#5-rpc_introspect-and-rpc_health)).
 - Router and method names are case-sensitive. Router names beginning with `_` are reserved.
 
 ---
@@ -240,8 +240,28 @@ headers (`-Register-*`, `-Introspect-*`, `-Request-Id`, `-Upstream`) pass throug
 
 ### `/rpc/_introspect`
 
-Source: `gateway/framework.go` (`IntrospectReport`), `rpc/descriptor.go`,
+Source: `gateway/introspect.go` (`IntrospectReport`), `rpc/descriptor.go`,
 `gateway/builtin/registry/aggregator.go` (cascade).
+
+> **Opt-in.** The endpoint is **OFF by default** — the catalog discloses the
+> full service/method/type surface, so the public endpoint is exposed only
+> via `gw.Use(introspect.New())` (the `gateway/builtin/introspect` plugin). A
+> gateway without it returns **404** on `/rpc/_introspect` (a closed endpoint
+> looks absent, not "exists, wrong method").
+>
+> Consequences:
+> - **Explorer** does NOT require it — the explorer builds the same report
+>   in-process (`gateway.IntrospectBody`) and serves its own UI, so you can run
+>   the explorer with the raw endpoint closed, or open the endpoint without the
+>   explorer.
+> - **Federation / mesh**: a registry aggregates pods by fetching each pod's
+>   `/rpc/_introspect` over HTTP, so **every pod you want federated must use the
+>   introspect plugin**. Without it the pod contributes nothing to the merged
+>   catalog (the aggregator logs a warning).
+> - **CLI** (`sov inspect` / `sov gen` / `sov conform` / `sov drift`) probe the
+>   endpoint over HTTP, so the target gateway must have it enabled.
+> - A polyglot pod implementing the wire contract by hand exposes
+>   `/rpc/_introspect` directly; the opt-in toggle is a Go-gateway concept.
 
 A pod returns its own catalog so the gateway can merge it. Minimal valid body:
 

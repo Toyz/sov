@@ -13,6 +13,7 @@ import (
 	"github.com/Toyz/sov"
 	"github.com/Toyz/sov/examples/chirp/handlers/auth"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
 )
 
 func main() {
@@ -21,6 +22,7 @@ func main() {
 		Credentials: auth.NewCredentialStore(),
 		Sessions:    auth.NewSessionStore(),
 	})
+	gw.MustUse(introspect.New())
 
 	log.Fatal(gw.JoinMesh(context.Background(), sov.MeshOptions{
 		UpstreamURL:    env("SOV_GATEWAY", "http://localhost:8080"),

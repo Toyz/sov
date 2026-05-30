@@ -12,7 +12,10 @@ import (
 	"github.com/Toyz/sov/examples/chirp/handlers/auth"
 	"github.com/Toyz/sov/examples/chirp/handlers/authz"
 	"github.com/Toyz/sov/gateway/builtin/audit"
+	"github.com/Toyz/sov/gateway/builtin/explorer"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
+	"github.com/Toyz/sov/gateway/builtin/manifest"
 	"github.com/Toyz/sov/gateway/builtin/meshsecret"
 	"github.com/Toyz/sov/gateway/builtin/registry"
 )
@@ -24,8 +27,14 @@ func main() {
 		Registry:   registry.Config{AllowedNames: []string{"Auth", "Authz", "User", "Chirp", "Feed"}},
 		HMACSeal:   hmacseal.Config{Secret: []byte(env("SOV_HMAC_SECRET", "demo-only-secret"))},
 		MeshSecret: meshsecret.Config{Secret: []byte(env("SOV_MESH_SECRET", "demo-only-mesh-secret"))},
-		Audit:      audit.Config{Out: os.Stdout},
 	}, sov.WithAdvertiseURL(advertiseURL))
+
+	// Opt-in observability / info-disclosure plugins (not in the base
+	// preset): explorer UI, plugin manifest, and the audit log.
+	gw.MustUse(explorer.New(explorer.Config{}))
+	gw.MustUse(introspect.New())
+	gw.MustUse(manifest.New(manifest.Config{}))
+	gw.MustUse(audit.New(audit.Config{Out: os.Stdout}))
 
 	gw.Register(&auth.AuthRouter{
 		Credentials: auth.NewCredentialStore(),

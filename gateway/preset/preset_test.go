@@ -2,12 +2,10 @@ package preset
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"testing"
 
 	"github.com/Toyz/sov/gateway"
-	"github.com/Toyz/sov/gateway/builtin/audit"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
 	"github.com/Toyz/sov/gateway/builtin/meshsecret"
 	"github.com/Toyz/sov/gateway/builtin/registertoken"
@@ -40,15 +38,28 @@ func TestMonolith_NoGatesByDefault(t *testing.T) {
 	}
 }
 
-// Audit is OPT-IN: no Out → no audit hook (no per-request identity/path
-// logging by default); set Out → wired. Same as the Registry preset.
-func TestMonolith_AuditOptIn(t *testing.T) {
-	if pluginNames(Monolith(MonolithConfig{}))["audit"] {
-		t.Error("audit wired with no Audit.Out — it must be opt-in (records every dispatch + subject)")
-	}
-	cfg := MonolithConfig{Audit: audit.Config{Out: io.Discard}}
-	if !pluginNames(Monolith(cfg))["audit"] {
-		t.Error("audit not wired when Audit.Out is set")
+// The observability / info-disclosure plugins (audit, explorer, manifest)
+// are OPT-IN and never in the base preset — they must be added explicitly
+// via gw.Use(...). The base bundle keeps only the minimal, safe-by-default
+// core: request-id, registry, batch, cors.
+func TestPresets_ObservabilityPluginsAreOptIn(t *testing.T) {
+	optIn := []string{"audit", "explorer", "manifest", "introspect"}
+	core := []string{"request-id", "registry", "batch", "cors"}
+
+	mono := pluginNames(Monolith(MonolithConfig{}))
+	reg := pluginNames(Registry(RegistryConfig{}))
+
+	for setName, names := range map[string]map[string]bool{"Monolith": mono, "Registry": reg} {
+		for _, p := range optIn {
+			if names[p] {
+				t.Errorf("%s base preset wired %q — must be opt-in via gw.Use(...)", setName, p)
+			}
+		}
+		for _, p := range core {
+			if !names[p] {
+				t.Errorf("%s base preset missing core plugin %q", setName, p)
+			}
+		}
 	}
 }
 

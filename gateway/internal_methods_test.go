@@ -71,6 +71,7 @@ func (r *OpsRouter) HardHiddenMethods() []string { return []string{"debugDump"} 
 
 func introspectReport(t *testing.T, gw *Gateway, internal bool) *IntrospectReport {
 	t.Helper()
+	gw.ExposeIntrospect() // endpoint is opt-in; these tests assert its body
 	h := Header{}
 	if internal {
 		h[IntrospectInternalHeader] = "1"

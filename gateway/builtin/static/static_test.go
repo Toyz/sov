@@ -10,6 +10,7 @@ import (
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/static"
+	"github.com/Toyz/sov/rpc"
 )
 
 func tree() fstest.MapFS {
@@ -23,6 +24,7 @@ func tree() fstest.MapFS {
 func serve(t *testing.T, p *static.Plugin, method, path string) *gateway.Response {
 	t.Helper()
 	gw := gateway.New()
+	gw.ExposeIntrospect() // opt-in endpoint; TestRPCNotShadowed asserts it isn't shadowed
 	if err := gw.Use(p); err != nil {
 		t.Fatalf("Use static: %v", err)
 	}
@@ -153,6 +155,38 @@ func TestSymlinkEscapeBlocked(t *testing.T) {
 	// through the sandboxed root — no escape.
 	if !strings.Contains(string(resp.Body), "<!DOCTYPE html>") {
 		t.Fatalf("expected SPA fallback to index, got status=%d body=%s", resp.Status, resp.Body)
+	}
+}
+
+// PingRouter is a minimal business router for the coexistence test.
+type PingRouter struct{}
+
+func (PingRouter) Ping(ctx *rpc.Context) (string, error) { return "pong", nil }
+
+// A catch-all static mount at "/" must NOT shadow business RPC: it declines
+// the reserved /rpc/ namespace (returns nil), the gateway falls through to
+// business dispatch, and "/" still serves the SPA. Exercises the full chain:
+// reserved-decline + gateway nil-fall-through.
+func TestStaticDoesNotShadowBusinessRPC(t *testing.T) {
+	gw := gateway.New()
+	gw.Register(&PingRouter{})
+	gw.MustUse(static.New(static.Config{FS: tree(), SPAFallback: true})) // catch-all "/"
+
+	// Business RPC dispatches, not shadowed by the "/" mount.
+	r := gw.Handle(context.Background(), &gateway.Request{
+		Method: http.MethodPost, Path: "/rpc/Ping/ping",
+		Header: gateway.Header{}, Body: []byte(`{"args":[]}`),
+	})
+	if r.Status != 200 || !strings.Contains(string(r.Body), "pong") {
+		t.Fatalf("business RPC shadowed by catch-all static: status=%d body=%s", r.Status, r.Body)
+	}
+
+	// "/" still serves the SPA index.
+	idx := gw.Handle(context.Background(), &gateway.Request{
+		Method: http.MethodGet, Path: "/", Header: gateway.Header{},
+	})
+	if idx.Status != 200 || !strings.Contains(string(idx.Body), "<!DOCTYPE html>") {
+		t.Fatalf("static / not served alongside business RPC: status=%d body=%s", idx.Status, idx.Body)
 	}
 }
 

@@ -12,10 +12,20 @@ import (
 	"github.com/Toyz/sov/examples/chirp/handlers/authz"
 	"github.com/Toyz/sov/examples/chirp/handlers/users"
 	"github.com/Toyz/sov/gateway/builtin/audit"
+	"github.com/Toyz/sov/gateway/builtin/explorer"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
+	"github.com/Toyz/sov/gateway/builtin/manifest"
 )
 
 func main() {
-	gw := sov.NewHybrid(sov.HybridConfig{Audit: audit.Config{Out: os.Stdout}})
+	gw := sov.NewHybrid(sov.HybridConfig{})
+
+	// Opt-in observability / info-disclosure plugins (not in the base
+	// preset): explorer UI, plugin manifest, and the audit log.
+	gw.MustUse(explorer.New(explorer.Config{}))
+	gw.MustUse(introspect.New())
+	gw.MustUse(manifest.New(manifest.Config{}))
+	gw.MustUse(audit.New(audit.Config{Out: os.Stdout}))
 
 	// Identity propagates to the remote Chirp+Feed pods with no extra
 	// wiring: the pods run WithTrustUpstreamClaims(true) and trust their

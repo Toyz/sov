@@ -65,9 +65,11 @@ func (p *Plugin) RoutePatterns() []string {
 }
 
 // ServeRoute renders the embedded UI. The catalog is whatever the
-// gateway's own /rpc/_introspect produces (registry-mode or pod-mode
-// — same surface). Re-entering via gw.Handle goes through the normal
-// middleware chain except this plugin's route (different path).
+// gateway's own introspect report produces (registry-mode or pod-mode —
+// same surface). It calls IntrospectBody directly rather than re-entering
+// the /rpc/_introspect endpoint, so the explorer works even when that
+// endpoint is opt-in-disabled (it discloses the same surface the explorer
+// renders, so coupling them would force the endpoint open).
 func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.Response {
 	// The "show internal" toggle fetches a distinct path; translate it to
 	// the introspect header so the gateway returns the full payload
@@ -77,7 +79,7 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 	if strings.HasSuffix(req.Path, "/api-internal.json") {
 		header[gateway.IntrospectInternalHeader] = "1"
 	}
-	introResp := p.gw.Handle(ctx, &gateway.Request{
+	introResp := p.gw.IntrospectBody(ctx, &gateway.Request{
 		Method: http.MethodGet,
 		Path:   "/rpc/_introspect",
 		Header: header,

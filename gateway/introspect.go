@@ -66,6 +66,24 @@ const (
 	IntrospectInternalHeader = "X-Sov-Introspect-Internal"
 )
 
+// ExposeIntrospect opens the PUBLIC /rpc/_introspect endpoint. Called by
+// the builtin introspect plugin's Apply; the endpoint is off by default
+// because the catalog discloses the full API surface. Idempotent.
+func (g *Gateway) ExposeIntrospect() { g.introspectExposed = true }
+
+// IntrospectExposed reports whether the public /rpc/_introspect endpoint
+// is open (i.e. the introspect plugin was used).
+func (g *Gateway) IntrospectExposed() bool { return g.introspectExposed }
+
+// IntrospectBody builds (and caches) the introspect catalog body for req,
+// independent of whether the PUBLIC endpoint is exposed. The explorer and
+// federation aggregators call this directly so they get the catalog
+// in-process without requiring /rpc/_introspect to be open. req may carry
+// the X-Sov-Introspect-Internal / -Trace / -Visited headers.
+func (g *Gateway) IntrospectBody(ctx context.Context, req *Request) *Response {
+	return g.handleIntrospect(ctx, req)
+}
+
 func (g *Gateway) handleIntrospect(ctx context.Context, req *Request) *Response {
 	// Loop-guard: when this gateway is itself being probed by an
 	// upstream master, the inbound Visited header lists every gateway

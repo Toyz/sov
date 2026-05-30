@@ -44,6 +44,14 @@ type Gateway struct {
 	// via its onChange hook.
 	catalog catalogCache
 
+	// introspectExposed gates the PUBLIC /rpc/_introspect endpoint. It is
+	// OFF by default — the catalog discloses the full service/method/type
+	// surface, so the endpoint is opt-in via gw.Use(introspect.New())
+	// (which calls ExposeIntrospect). The report itself is always buildable
+	// in-process via IntrospectBody — the explorer and federation use that
+	// directly, so they keep working without the public endpoint being open.
+	introspectExposed bool
+
 	// muMiddleware guards dynamic Use() appends after construction.
 	muMiddleware sync.Mutex
 	middlewares  []Middleware

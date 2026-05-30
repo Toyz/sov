@@ -13,6 +13,7 @@ import (
 	"github.com/Toyz/sov"
 	"github.com/Toyz/sov/examples/chirp/handlers/feed"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
 )
 
 func main() {
@@ -21,6 +22,7 @@ func main() {
 
 	gw := sov.NewPod(sov.PodConfig{HMACSeal: hmacseal.Config{Secret: []byte(env("SOV_HMAC_SECRET", ""))}}, sov.WithTrustUpstreamClaims(true))
 	gw.Register(&feed.FeedRouter{Client: feed.NewClientAdapter(cli)})
+	gw.MustUse(introspect.New())
 
 	log.Fatal(gw.JoinMesh(context.Background(), sov.MeshOptions{
 		UpstreamURL:    gwURL,

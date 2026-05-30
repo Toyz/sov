@@ -7,7 +7,10 @@ import (
 	"os"
 
 	"github.com/Toyz/sov"
+	"github.com/Toyz/sov/gateway/builtin/explorer"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
+	"github.com/Toyz/sov/gateway/builtin/manifest"
 	"github.com/Toyz/sov/gateway/builtin/meshsecret"
 	"github.com/Toyz/sov/gateway/builtin/registertoken"
 	"github.com/Toyz/sov/gateway/builtin/registry"
@@ -24,6 +27,13 @@ func main() {
 		// HMAC gate and the AllowedNames gate.
 		RegisterToken: registertoken.Config{Token: []byte(envDefault("SOV_REGISTER_TOKEN", ""))},
 	})
+
+	// Opt-in info-disclosure plugins (not in the base preset): the
+	// explorer UI and plugin manifest, so /rpc/_explorer/ and
+	// /rpc/_manifest resolve on this gateway entry point.
+	gw.MustUse(explorer.New(explorer.Config{}))
+	gw.MustUse(introspect.New())
+	gw.MustUse(manifest.New(manifest.Config{}))
 
 	log.Printf("chirp mesh gateway on %s — registry mode, mesh-secret gated", addr)
 	if err := gw.Run(context.Background(), addr); err != nil {

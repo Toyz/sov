@@ -24,12 +24,17 @@ import (
 	"github.com/Toyz/sov/examples/chirp/handlers/feed"
 	"github.com/Toyz/sov/examples/chirp/handlers/users"
 	"github.com/Toyz/sov/gateway/builtin/audit"
+	"github.com/Toyz/sov/gateway/builtin/explorer"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
+	"github.com/Toyz/sov/gateway/builtin/manifest"
 )
 
 func main() {
 	// Admin gateway — Auth + Authz + User. Audit goes to discard so
-	// the demo's stdout doesn't double-stream events.
-	admin := sov.NewMonolith(sov.MonolithConfig{Audit: audit.Config{Out: io.Discard}})
+	// the demo's stdout doesn't double-stream events. Audit is opt-in
+	// (not in the base preset), so wire it explicitly.
+	admin := sov.NewMonolith(sov.MonolithConfig{})
+	admin.MustUse(audit.New(audit.Config{Out: io.Discard}))
 	admin.Register(&auth.AuthRouter{
 		Credentials: auth.NewCredentialStore(),
 		Sessions:    auth.NewSessionStore(),
@@ -39,8 +44,13 @@ func main() {
 
 	// Public gateway — Chirp + Feed, plus a localpeer pointer at
 	// admin for the Auth/Authz/User services. Audit on stdout so the
-	// demo shows mode=peer for cross-gateway calls.
-	public := sov.NewMonolith(sov.MonolithConfig{Audit: audit.Config{Out: os.Stdout}})
+	// demo shows mode=peer for cross-gateway calls. Explorer + manifest
+	// + audit are opt-in (not in the base preset).
+	public := sov.NewMonolith(sov.MonolithConfig{})
+	public.MustUse(explorer.New(explorer.Config{}))
+	public.MustUse(introspect.New())
+	public.MustUse(manifest.New(manifest.Config{}))
+	public.MustUse(audit.New(audit.Config{Out: os.Stdout}))
 	public.Register(&chirps.ChirpRouter{Store: chirps.NewMemoryStore()})
 	public.Register(&feed.FeedRouter{Client: feed.NewClientAdapter(public.LocalClient())})
 

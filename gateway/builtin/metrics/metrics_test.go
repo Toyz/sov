@@ -121,6 +121,7 @@ func TestMetrics_SnapshotCapability(t *testing.T) {
 
 func TestMetrics_IntrospectAugment(t *testing.T) {
 	gw := gateway.New()
+	gw.ExposeIntrospect() // endpoint is opt-in; this test reads its body
 	mustUse(t, gw,
 		requestid.New(requestid.Config{}),
 		metrics.New(metrics.Config{}),

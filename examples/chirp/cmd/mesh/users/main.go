@@ -10,11 +10,13 @@ import (
 	"github.com/Toyz/sov"
 	"github.com/Toyz/sov/examples/chirp/handlers/users"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
 )
 
 func main() {
 	gw := sov.NewPod(sov.PodConfig{HMACSeal: hmacseal.Config{Secret: []byte(env("SOV_HMAC_SECRET", ""))}}, sov.WithTrustUpstreamClaims(true))
 	gw.Register(&users.UserRouter{Store: users.NewMemoryStore()})
+	gw.MustUse(introspect.New())
 
 	log.Fatal(gw.JoinMesh(context.Background(), sov.MeshOptions{
 		UpstreamURL:    env("SOV_GATEWAY", "http://localhost:8080"),

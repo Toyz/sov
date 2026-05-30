@@ -47,6 +47,7 @@ func (r *SecondMakerRouter) Make(_ *rpc.Context, p *MakeParams) (*Widget, error)
 
 func introspect(t *testing.T, gw *Gateway) *IntrospectReport {
 	t.Helper()
+	gw.ExposeIntrospect() // endpoint is opt-in; these tests assert its body
 	resp := gw.Handle(context.Background(), &Request{
 		Method: http.MethodGet, Path: "/rpc/_introspect", Header: Header{},
 	})

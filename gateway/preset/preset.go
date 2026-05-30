@@ -20,15 +20,10 @@
 package preset
 
 import (
-	"io"
-
 	"github.com/Toyz/sov/gateway"
-	"github.com/Toyz/sov/gateway/builtin/audit"
 	"github.com/Toyz/sov/gateway/builtin/batch"
 	"github.com/Toyz/sov/gateway/builtin/cors"
-	"github.com/Toyz/sov/gateway/builtin/explorer"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
-	"github.com/Toyz/sov/gateway/builtin/manifest"
 	"github.com/Toyz/sov/gateway/builtin/meshsecret"
 	"github.com/Toyz/sov/gateway/builtin/registertoken"
 	"github.com/Toyz/sov/gateway/builtin/registry"
@@ -41,12 +36,15 @@ import (
 // remote pods self-register alongside the in-process services — so the
 // join gates below matter: a hybrid gateway exposes _register exactly
 // like a registry does.
+//
+// The base bundle is intentionally minimal + safe-by-default. The
+// observability / info-disclosure plugins (audit, explorer, manifest)
+// are NOT wired here — they are opt-in via gw.Use(...) after the gateway
+// is constructed.
 type MonolithConfig struct {
 	RequestID requestid.Config
 	Registry  registry.Config // set Registry.AllowedNames for a name allowlist gate
 	Batch     batch.Config
-	Explorer  explorer.Config
-	Manifest  manifest.Config
 	Cors      cors.Config
 	// Join/seal gates — all optional, empty value skips the plugin.
 	// Pure-monolith deploys (no remote pods) leave these empty. A hybrid
@@ -56,15 +54,22 @@ type MonolithConfig struct {
 	HMACSeal      hmacseal.Config      // optional — empty Secret skips (X-Sov-Seal claim proof)
 	MeshSecret    meshsecret.Config    // optional — empty Secret skips (HMAC _register join gate)
 	RegisterToken registertoken.Config // optional — empty Token skips (shared-token _register join gate)
-	Audit         audit.Config         // OPT-IN — wired only when Audit.Out is set (per-event JSON sink)
 }
 
 // Monolith returns the plugin set for the cmd. Pass MonolithConfig{} for
-// sane defaults. **Audit is OPT-IN** — it records every dispatch (router,
-// method, status, duration, SUBJECT identity) and so should not run unless
-// you ask for it; set Audit.Out (e.g. os.Stdout) to enable it. Same gating
-// as the Registry preset, consistent across presets. The HMACSeal/
-// MeshSecret/RegisterToken gates are likewise wired only when their
+// sane defaults. The bundle is minimal + safe-by-default: requestid,
+// registry, batch, cors, plus any configured join/seal gates.
+//
+// audit, explorer, and manifest are OPT-IN and NOT included here — they
+// disclose information (audit logs every dispatch incl. SUBJECT identity;
+// explorer exposes the full API catalog + try-it UI; manifest exposes the
+// plugin list), so enable them explicitly:
+//
+//	gw.Use(explorer.New(explorer.Config{}))
+//	gw.Use(manifest.New(manifest.Config{}))
+//	gw.Use(audit.New(audit.Config{Out: os.Stdout}))
+//
+// The HMACSeal/MeshSecret/RegisterToken gates are wired only when their
 // secret/token is set — important for the Hybrid preset, whose _register
 // endpoint is OPEN unless one of the join gates (MeshSecret/RegisterToken)
 // or Registry.AllowedNames is set.
@@ -73,8 +78,6 @@ func Monolith(cfg MonolithConfig) []any {
 		requestid.New(cfg.RequestID),
 		registry.New(cfg.Registry),
 		batch.New(cfg.Batch),
-		explorer.New(cfg.Explorer),
-		manifest.New(cfg.Manifest),
 		cors.New(cfg.Cors),
 	}
 	if len(cfg.HMACSeal.Secret) > 0 {
@@ -85,11 +88,6 @@ func Monolith(cfg MonolithConfig) []any {
 	}
 	if len(cfg.RegisterToken.Token) > 0 {
 		out = append(out, registertoken.New(cfg.RegisterToken))
-	}
-	// Audit is opt-in: only wired when a sink is configured. No Out → no
-	// per-request audit hook firing, no identity/path logging by default.
-	if cfg.Audit.Out != nil {
-		out = append(out, audit.New(cfg.Audit))
 	}
 	return out
 }
@@ -116,29 +114,31 @@ func Pod(cfg PodConfig) []any {
 // master gateway fronting a mesh of pods. AllowedNames on the
 // registry plugin replaces the standalone allowlist plugin. For
 // AdvertiseURL pass sov.WithAdvertiseURL(...) at gateway construction.
+//
+// Like MonolithConfig, the base bundle is minimal + safe-by-default;
+// audit, explorer, and manifest are NOT wired here — opt in via
+// gw.Use(...) after construction.
 type RegistryConfig struct {
 	RequestID     requestid.Config
 	Registry      registry.Config // set Registry.AllowedNames to gate _register
 	Batch         batch.Config
-	Explorer      explorer.Config
-	Manifest      manifest.Config
 	Cors          cors.Config
 	HMACSeal      hmacseal.Config      // optional — empty Secret skips
 	MeshSecret    meshsecret.Config    // optional — empty Secret skips (HMAC join gate)
 	RegisterToken registertoken.Config // optional — empty Token skips (simple shared-token join gate)
-	Audit         audit.Config         // optional — nil Out skips
 }
 
 // Registry returns the plugin set for a registry/master gateway.
 // Empty-valued config entries skip their plugin so a minimal call
 // like preset.Registry(preset.RegistryConfig{}) still works.
+//
+// audit, explorer, and manifest are OPT-IN and NOT included — they
+// disclose information, so enable them explicitly via gw.Use(...).
 func Registry(cfg RegistryConfig) []any {
 	out := []any{
 		requestid.New(cfg.RequestID),
 		registry.New(cfg.Registry),
 		batch.New(cfg.Batch),
-		explorer.New(cfg.Explorer),
-		manifest.New(cfg.Manifest),
 		cors.New(cfg.Cors),
 	}
 	if len(cfg.HMACSeal.Secret) > 0 {
@@ -149,9 +149,6 @@ func Registry(cfg RegistryConfig) []any {
 	}
 	if len(cfg.RegisterToken.Token) > 0 {
 		out = append(out, registertoken.New(cfg.RegisterToken))
-	}
-	if cfg.Audit.Out != nil {
-		out = append(out, audit.New(cfg.Audit))
 	}
 	return out
 }
@@ -177,13 +174,6 @@ type HybridConfig = MonolithConfig
 
 // Hybrid returns the plugin set for a hybrid gateway.
 func Hybrid(cfg HybridConfig) []any { return Monolith(cfg) }
-
-// SetMonolithAuditOut is a tiny convenience for ops who only want
-// to flip the audit sink on a default Monolith bundle.
-func SetMonolithAuditOut(cfg MonolithConfig, w io.Writer) MonolithConfig {
-	cfg.Audit.Out = w
-	return cfg
-}
 
 // NewMonolith returns a gateway pre-loaded with the Monolith preset.
 // Equivalent to:

@@ -20,12 +20,21 @@ import (
 	"github.com/Toyz/sov/examples/chirp/handlers/users"
 	"github.com/Toyz/sov/gateway/builtin/audit"
 	authplugin "github.com/Toyz/sov/gateway/builtin/auth"
+	"github.com/Toyz/sov/gateway/builtin/explorer"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
+	"github.com/Toyz/sov/gateway/builtin/manifest"
 )
 
 func main() {
-	gw := sov.NewMonolith(sov.MonolithConfig{
-		Audit: audit.Config{Out: os.Stdout},
-	})
+	gw := sov.NewMonolith(sov.MonolithConfig{})
+
+	// Observability / info-disclosure plugins are opt-in (not in the
+	// base preset): explicitly enable the API explorer UI, the plugin
+	// manifest, and the per-dispatch audit log here.
+	gw.MustUse(explorer.New(explorer.Config{}))
+	gw.MustUse(introspect.New())
+	gw.MustUse(manifest.New(manifest.Config{}))
+	gw.MustUse(audit.New(audit.Config{Out: os.Stdout}))
 
 	// Chirp business services.
 	gw.Register(&auth.AuthRouter{

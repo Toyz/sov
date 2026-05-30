@@ -22,5 +22,10 @@ func newRegistryGateway(opts ...Option) *Gateway {
 	gw := New(opts...)
 	_ = gw.Use(registry.New(registry.Config{}))
 	_ = gw.Use(batch.New(batch.Config{}))
+	// /rpc/_introspect is opt-in (off by default). The registry/federation
+	// tests assert its catalog, so open it here — the equivalent of
+	// gw.Use(introspect.New()) in real code (the plugin can't be imported
+	// from the internal gateway test without a cycle).
+	gw.ExposeIntrospect()
 	return gw
 }
