@@ -10,11 +10,13 @@ import (
 	"github.com/Toyz/sov"
 	"github.com/Toyz/sov/examples/chirp/handlers/chirps"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
 )
 
 func main() {
 	gw := sov.NewPod(sov.PodConfig{HMACSeal: hmacseal.Config{Secret: []byte(env("SOV_HMAC_SECRET", "demo-only-secret"))}}, sov.WithTrustUpstreamClaims(true))
 	gw.Register(&chirps.ChirpRouter{Store: chirps.NewMemoryStore()})
+	gw.MustUse(introspect.New())
 
 	log.Fatal(gw.JoinMesh(context.Background(), sov.MeshOptions{
 		UpstreamURL:    env("SOV_TEAM", "http://team-feed:9100"),

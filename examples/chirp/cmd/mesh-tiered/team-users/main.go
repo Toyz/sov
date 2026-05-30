@@ -10,6 +10,7 @@ import (
 
 	"github.com/Toyz/sov"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
+	"github.com/Toyz/sov/gateway/builtin/introspect"
 	"github.com/Toyz/sov/gateway/builtin/meshsecret"
 	"github.com/Toyz/sov/gateway/builtin/registry"
 )
@@ -26,6 +27,7 @@ func main() {
 		HMACSeal:   hmacseal.Config{Secret: []byte(env("SOV_HMAC_SECRET", "demo-only-secret"))},
 		MeshSecret: meshsecret.Config{Secret: []byte(downSecret)},
 	}, sov.WithTrustUpstreamClaims(true), sov.WithAdvertiseURL(advertiseURL))
+	gw.MustUse(introspect.New())
 
 	log.Fatal(gw.JoinMesh(context.Background(), sov.MeshOptions{
 		UpstreamURL:    env("SOV_PRIME", "http://prime:8080"),
