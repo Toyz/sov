@@ -1,0 +1,23 @@
+name: bench-guard
+
+# Coarse benchmark regression net. See BENCHMARKS.md. The threshold is
+# generous on purpose — CI hardware differs from where bench/baseline.txt
+# was captured, so this catches catastrophic regressions, not small drift.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  bench-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Run benchmark regression guard
+        run: scripts/bench-guard.sh
+        env:
+          THRESHOLD_PCT: "120" # extra slack: shared CI runners are noisy
+          COUNT: "6"

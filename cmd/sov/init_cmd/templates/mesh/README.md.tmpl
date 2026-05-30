@@ -1,0 +1,37 @@
+# {{.Project}}
+
+A sov mesh scaffold: one central registry gateway plus N pods, all
+running under docker-compose.
+
+## Quickstart
+
+```sh
+# Generate fresh HMAC + mesh secrets (already done by `sov init mesh`,
+# re-run if you want to rotate).
+sov init secrets
+
+# Source secrets so docker-compose interpolates them.
+set -a; . .sov.env; set +a
+
+# Build + boot the mesh.
+docker compose up --build
+
+# Inspect what registered.
+curl -s -X POST http://localhost:8080/rpc/_introspect | jq
+
+# Call the sample Echo handler.
+curl -s -X POST http://localhost:8080/rpc/Echo/echo \
+  -H 'content-type: application/json' \
+  -d '{"message":"hi"}'
+```
+
+## Layout
+
+- `gateway/` — registry gateway (`sov.NewRegistry`).
+- `pod/` — sample pod (`sov.NewPod` + `gw.RunMesh`).
+- `Dockerfile` — multi-stage build, ROLE arg picks which cmd to build.
+- `docker-compose.yml` — gateway + two pods.
+- `.sov.env` — random HMAC + mesh secrets. **Do not commit.**
+
+Add additional services by duplicating `pod/` and registering a new
+router (rename `EchoRouter`).

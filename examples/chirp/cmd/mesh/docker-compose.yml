@@ -1,0 +1,101 @@
+# Chirp mesh — 6 containers, 5 per-service pods + 1 central gateway.
+# Same Dockerfile builds each; ROLE build-arg picks the cmd directory.
+#
+#   docker compose -f examples/chirp/cmd/mesh/docker-compose.yml up --build
+#   BASE=http://localhost:8080 bash examples/chirp/walkthrough.sh
+#
+# SOV_MESH_SECRET hardens /rpc/_register — every pod signs its
+# register POST with HMAC-SHA256(secret, body+ts); the gateway rejects
+# unsigned or mismatched registrations. Demo secret only — production
+# should source from a real secret store.
+
+name: sov-chirp-mesh
+
+x-pod: &pod
+  build:
+    context: ../../../../
+    dockerfile: examples/chirp/cmd/mesh/Dockerfile
+  depends_on:
+    - gateway
+
+x-mesh-secret: &mesh-secret
+  SOV_MESH_SECRET: "demo-only-mesh-secret"
+
+services:
+  gateway:
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh/Dockerfile
+      args:
+        ROLE: gateway
+    environment:
+      SOV_LISTEN: ":8080"
+      SOV_HMAC_SECRET: "demo-only-secret"
+      <<: *mesh-secret
+    ports:
+      - "8080:8080"
+
+  auth:
+    <<: *pod
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh/Dockerfile
+      args:
+        ROLE: auth
+    environment:
+      SOV_LISTEN: ":9001"
+      SOV_ADVERTISE: "http://auth:9001"
+      SOV_GATEWAY: "http://gateway:8080"
+      <<: *mesh-secret
+
+  authz:
+    <<: *pod
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh/Dockerfile
+      args:
+        ROLE: authz
+    environment:
+      SOV_LISTEN: ":9005"
+      SOV_ADVERTISE: "http://authz:9005"
+      SOV_GATEWAY: "http://gateway:8080"
+      <<: *mesh-secret
+
+  users:
+    <<: *pod
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh/Dockerfile
+      args:
+        ROLE: users
+    environment:
+      SOV_LISTEN: ":9003"
+      SOV_ADVERTISE: "http://users:9003"
+      SOV_GATEWAY: "http://gateway:8080"
+      <<: *mesh-secret
+
+  chirps:
+    <<: *pod
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh/Dockerfile
+      args:
+        ROLE: chirps
+    environment:
+      SOV_LISTEN: ":9002"
+      SOV_ADVERTISE: "http://chirps:9002"
+      SOV_GATEWAY: "http://gateway:8080"
+      <<: *mesh-secret
+
+  feed:
+    <<: *pod
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh/Dockerfile
+      args:
+        ROLE: feed
+    environment:
+      SOV_LISTEN: ":9004"
+      SOV_ADVERTISE: "http://feed:9004"
+      SOV_GATEWAY: "http://gateway:8080"
+      <<: *mesh-secret

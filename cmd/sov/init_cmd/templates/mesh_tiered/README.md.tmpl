@@ -1,0 +1,36 @@
+# {{.Project}}
+
+A sov tiered mesh: prime gateway → team gateways (federation) → pods.
+Demonstrates the multi-tier shape — useful for org-scale deployments
+where each team owns a slice of the catalog.
+
+## Quickstart
+
+```sh
+# Generate fresh HMAC + mesh secrets if you haven't.
+sov init secrets
+
+# Source secrets so docker-compose interpolates them.
+set -a; . .sov.env; set +a
+
+# Build + boot the mesh.
+docker compose up --build
+
+# Inspect — note Echo is hosted on pod-* but federated through team.
+curl -s -X POST http://localhost:8080/rpc/_introspect | jq
+
+# Call: prime forwards to team, team forwards to pod.
+curl -s -X POST http://localhost:8080/rpc/Echo/echo \
+  -H 'content-type: application/json' \
+  -d '{"message":"hi"}'
+```
+
+## Layout
+
+- `prime/` — master gateway (`sov.NewRegistry`).
+- `team/` — federation gateway (`sov.NewRegistry` + `RunMesh` + Federate).
+- `pod/` — sample pod (`sov.NewPod` + `RunMesh`).
+- `.sov.env` — random HMAC + mesh secrets. **Do not commit.**
+
+Add a new team by duplicating `team/` (different AllowedNames + Federate slice)
+and add the corresponding pods.

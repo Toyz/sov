@@ -1,0 +1,100 @@
+# Chirp tiered mesh — 6 containers across 3 tiers.
+#
+#   prime (master) :8080
+#     ├ team-feed  :9100 federates live set (Chirp+Feed)
+#     │   ├ chirps :9101 (handler pod)
+#     │   └ feed   :9102 (handler pod)
+#     └ team-users :9200 federates live set (User)
+#         └ users  :9201 (handler pod)
+#
+#   docker compose -f examples/chirp/cmd/mesh-tiered/docker-compose.yml up --build
+#   BASE=http://localhost:8080 bash examples/chirp/walkthrough.sh
+
+name: sov-chirp-tiered
+
+x-team-env: &team-env
+  SOV_HMAC_SECRET: "demo-only-secret"
+  SOV_MESH_SECRET: "demo-only-mesh-secret"
+  SOV_PRIME:       "http://prime:8080"
+
+services:
+  prime:
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh-tiered/Dockerfile
+      args:
+        ROLE: prime
+    environment:
+      SOV_LISTEN: ":8080"
+      SOV_ADVERTISE: "http://prime:8080"
+      SOV_HMAC_SECRET: "demo-only-secret"
+      SOV_MESH_SECRET: "demo-only-mesh-secret"
+    ports:
+      - "8080:8080"
+
+  team-feed:
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh-tiered/Dockerfile
+      args:
+        ROLE: team-feed
+    depends_on: [prime]
+    environment:
+      <<: *team-env
+      SOV_LISTEN: ":9100"
+      SOV_ADVERTISE: "http://team-feed:9100"
+
+  team-users:
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh-tiered/Dockerfile
+      args:
+        ROLE: team-users
+    depends_on: [prime]
+    environment:
+      <<: *team-env
+      SOV_LISTEN: ":9200"
+      SOV_ADVERTISE: "http://team-users:9200"
+
+  chirps:
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh-tiered/Dockerfile
+      args:
+        ROLE: chirps
+    depends_on: [team-feed]
+    environment:
+      SOV_HMAC_SECRET: "demo-only-secret"
+      SOV_MESH_SECRET: "demo-only-mesh-secret"
+      SOV_TEAM:        "http://team-feed:9100"
+      SOV_LISTEN:      ":9101"
+      SOV_ADVERTISE:   "http://chirps:9101"
+
+  feed:
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh-tiered/Dockerfile
+      args:
+        ROLE: feed
+    depends_on: [team-feed]
+    environment:
+      SOV_HMAC_SECRET: "demo-only-secret"
+      SOV_MESH_SECRET: "demo-only-mesh-secret"
+      SOV_TEAM:        "http://team-feed:9100"
+      SOV_PRIME:       "http://prime:8080"
+      SOV_LISTEN:      ":9102"
+      SOV_ADVERTISE:   "http://feed:9102"
+
+  users:
+    build:
+      context: ../../../../
+      dockerfile: examples/chirp/cmd/mesh-tiered/Dockerfile
+      args:
+        ROLE: users
+    depends_on: [team-users]
+    environment:
+      SOV_HMAC_SECRET: "demo-only-secret"
+      SOV_MESH_SECRET: "demo-only-mesh-secret"
+      SOV_TEAM:        "http://team-users:9200"
+      SOV_LISTEN:      ":9201"
+      SOV_ADVERTISE:   "http://users:9201"

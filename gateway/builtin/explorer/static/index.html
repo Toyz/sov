@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>sov explorer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/rpc/_explorer/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>sov explorer</h1>
+    <nav>
+      <button data-tab="methods" class="active">Methods</button>
+      <button data-tab="types">Types</button>
+      <span id="drift-badge" hidden></span>
+      <label id="show-internal-label" title="Reveal soft-internal methods (framework auth/authz hooks stay hidden)">
+        <input type="checkbox" id="show-internal"> Show internal
+      </label>
+    </nav>
+  </header>
+  <main>
+    <aside id="sidebar"></aside>
+    <section id="detail"></section>
+  </main>
+  <script src="/rpc/_explorer/static/app.js"></script>
+</body>
+</html>
