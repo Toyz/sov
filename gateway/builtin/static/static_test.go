@@ -3,6 +3,7 @@ package static_test
 import (
 	"context"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -103,6 +104,55 @@ func TestRPCNotShadowed(t *testing.T) {
 	// adapter stamps the content-type); confirm it's the catalog, not HTML.
 	if !strings.Contains(string(resp.Body), "services") {
 		t.Fatalf("introspect body not the catalog: %s", resp.Body)
+	}
+}
+
+func TestHeadIsHeaderOnly(t *testing.T) {
+	p := static.New(static.Config{FS: tree()})
+	resp := serve(t, p, http.MethodHead, "/assets/app.js")
+	if resp.Status != 200 {
+		t.Fatalf("status=%d", resp.Status)
+	}
+	if len(resp.Body) != 0 {
+		t.Errorf("HEAD returned a body (%d bytes); must be header-only", len(resp.Body))
+	}
+	if !strings.Contains(resp.Header.Get("Content-Type"), "javascript") {
+		t.Errorf("HEAD missing Content-Type: %q", resp.Header.Get("Content-Type"))
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != "14" { // len("console.log(1)")
+		t.Errorf("HEAD Content-Length=%q, want 14 (the would-be body size)", cl)
+	}
+}
+
+func TestSymlinkEscapeBlocked(t *testing.T) {
+	// os.Root (via Config.Dir) must NOT follow a symlink that points
+	// outside the served tree — os.DirFS would have. Build a dir with
+	// index.html + an "escape" symlink → ../secret, and confirm a request
+	// for /escape does not read the outside file.
+	root := t.TempDir()
+	served := root + "/site"
+	if err := os.MkdirAll(served, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(served+"/index.html", []byte("<!DOCTYPE html>ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root+"/secret", []byte("TOPSECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../secret", served+"/escape"); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	p := static.New(static.Config{Dir: served, SPAFallback: true})
+	resp := serve(t, p, http.MethodGet, "/escape")
+	if strings.Contains(string(resp.Body), "TOPSECRET") {
+		t.Fatalf("symlink escaped the served tree — leaked outside file: %s", resp.Body)
+	}
+	// Falls back to index (200) since the symlink target is unreadable
+	// through the sandboxed root — no escape.
+	if !strings.Contains(string(resp.Body), "<!DOCTYPE html>") {
+		t.Fatalf("expected SPA fallback to index, got status=%d body=%s", resp.Status, resp.Body)
 	}
 }
 

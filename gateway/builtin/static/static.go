@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/Toyz/sov/gateway"
@@ -47,6 +48,14 @@ type Config struct {
 	// IndexFile is served for the prefix root and for directory paths,
 	// and is the SPAFallback target. Default "index.html".
 	IndexFile string
+	// ReservedPrefixes are request-path prefixes the plugin DECLINES
+	// (returns nil) instead of serving, so routing falls through to the
+	// gateway's business RPC dispatch. Without this a catch-all "/" mount
+	// would shadow every /rpc/{Router}/{method} call. Defaults to
+	// {"/rpc/"} — the sov RPC namespace. Set explicitly to override
+	// (e.g. add a reverse-proxied API path); pass a non-nil empty slice
+	// to reserve nothing.
+	ReservedPrefixes []string
 }
 
 // Plugin is the static-file route owner returned by New.
@@ -55,6 +64,7 @@ type Plugin struct {
 	prefix   string
 	index    string
 	fallback bool
+	reserved []string
 }
 
 // Compile-time proof of the hooks this plugin binds — a signature drift
@@ -74,7 +84,17 @@ func New(cfg Config) *Plugin {
 		if cfg.Dir == "" {
 			panic("static.New: one of Config.FS or Config.Dir is required")
 		}
-		fsys = os.DirFS(cfg.Dir)
+		// os.OpenRoot (not os.DirFS) so the served tree is symlink-SANDBOXED:
+		// a symlink inside Dir pointing outside the root cannot escape.
+		// os.DirFS is path-based only and would happily follow such a
+		// symlink to /etc/passwd. The root fd lives for the plugin's
+		// lifetime (it serves for the whole process), so it's intentionally
+		// not closed.
+		root, err := os.OpenRoot(cfg.Dir)
+		if err != nil {
+			panic("static.New: open dir " + cfg.Dir + ": " + err.Error())
+		}
+		fsys = root.FS()
 	}
 
 	prefix := cfg.PathPrefix
@@ -90,11 +110,19 @@ func New(cfg Config) *Plugin {
 		index = "index.html"
 	}
 
+	// nil → default to the sov RPC namespace; a non-nil (incl. empty)
+	// slice is taken verbatim so callers can reserve nothing or override.
+	reserved := cfg.ReservedPrefixes
+	if reserved == nil {
+		reserved = []string{"/rpc/"}
+	}
+
 	return &Plugin{
 		fsys:     fsys,
 		prefix:   prefix,
 		index:    index,
 		fallback: cfg.SPAFallback,
+		reserved: reserved,
 	}
 }
 
@@ -120,6 +148,14 @@ func (p *Plugin) RoutePatterns() []string {
 // Only GET/HEAD are served; everything else is 405. Unresolved paths
 // fall back to the index (200) when SPAFallback is set, else 404.
 func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.Response {
+	// Decline reserved paths (e.g. "/rpc/...") so a catch-all "/" mount
+	// falls through to business RPC dispatch instead of shadowing it.
+	for _, pre := range p.reserved {
+		if strings.HasPrefix(req.Path, pre) {
+			return nil
+		}
+	}
+
 	if req.Method != http.MethodGet && req.Method != http.MethodHead {
 		return &gateway.Response{
 			Status: http.StatusMethodNotAllowed,
@@ -127,14 +163,31 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 		}
 	}
 
-	rel := p.relPath(req.Path)
+	resp := p.resolve(req.Path)
+
+	// HEAD: same status + headers as GET, but no body. Report the would-be
+	// length via Content-Length so HEAD is RFC-correct (header-only).
+	if req.Method == http.MethodHead {
+		if resp.Header == nil {
+			resp.Header = gateway.Header{}
+		}
+		resp.Header["Content-Length"] = strconv.Itoa(len(resp.Body))
+		resp.Body = nil
+	}
+	return resp
+}
+
+// resolve maps a request path to the GET response (file, index, or 404).
+func (p *Plugin) resolve(reqPath string) *gateway.Response {
+	rel := p.relPath(reqPath)
 	if rel == "" {
 		return p.serveIndex()
 	}
 
-	// path.Clean + the leading-slash strip below neutralize "..":
+	// path.Clean + the leading-slash strip in relPath neutralize "..":
 	// rel never escapes the tree root. fs.ValidPath is the belt to the
-	// Clean suspenders — reject anything still non-canonical.
+	// Clean suspenders — reject anything still non-canonical. (The
+	// os.Root-backed FS also refuses symlink escapes at the FS layer.)
 	if !fs.ValidPath(rel) {
 		return p.notFound()
 	}

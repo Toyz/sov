@@ -61,13 +61,17 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 	}
 	// Plugin-owned routes via RouteHandler. Registered after framework
 	// endpoints so a plugin cannot shadow /rpc/_health, _introspect,
-	// _batch.
+	// _batch. A handler that returns nil DECLINES the request — routing
+	// falls through to business dispatch. This lets a broad catch-all
+	// mount (e.g. a static SPA plugin at "/") coexist with business RPC
+	// routes by declining the paths it doesn't own (e.g. "/rpc/...").
 	if route, ok := g.matchPluginRoute(req.Path); ok {
-		resp := route.handler(ctx, req)
-		if resp != nil && resp.Mode == "" {
-			resp.Mode = ModePlugin
+		if resp := route.handler(ctx, req); resp != nil {
+			if resp.Mode == "" {
+				resp.Mode = ModePlugin
+			}
+			return resp
 		}
-		return resp
 	}
 	return g.routeBusiness(ctx, req)
 }

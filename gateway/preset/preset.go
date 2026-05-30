@@ -56,15 +56,18 @@ type MonolithConfig struct {
 	HMACSeal      hmacseal.Config      // optional — empty Secret skips (X-Sov-Seal claim proof)
 	MeshSecret    meshsecret.Config    // optional — empty Secret skips (HMAC _register join gate)
 	RegisterToken registertoken.Config // optional — empty Token skips (shared-token _register join gate)
-	Audit         audit.Config         // Audit.Out is the per-event JSON sink (io.Discard to silence)
+	Audit         audit.Config         // OPT-IN — wired only when Audit.Out is set (per-event JSON sink)
 }
 
-// Monolith returns the plugin set for the cmd. Pass MonolithConfig{}
-// for full defaults (audit writes to discard); set Audit.Out =
-// os.Stdout for visible logging. The HMACSeal/MeshSecret/RegisterToken
-// gates are wired only when their secret/token is set — important for
-// the Hybrid preset, whose _register endpoint is OPEN unless one of the
-// join gates (MeshSecret/RegisterToken) or Registry.AllowedNames is set.
+// Monolith returns the plugin set for the cmd. Pass MonolithConfig{} for
+// sane defaults. **Audit is OPT-IN** — it records every dispatch (router,
+// method, status, duration, SUBJECT identity) and so should not run unless
+// you ask for it; set Audit.Out (e.g. os.Stdout) to enable it. Same gating
+// as the Registry preset, consistent across presets. The HMACSeal/
+// MeshSecret/RegisterToken gates are likewise wired only when their
+// secret/token is set — important for the Hybrid preset, whose _register
+// endpoint is OPEN unless one of the join gates (MeshSecret/RegisterToken)
+// or Registry.AllowedNames is set.
 func Monolith(cfg MonolithConfig) []any {
 	out := []any{
 		requestid.New(cfg.RequestID),
@@ -83,7 +86,11 @@ func Monolith(cfg MonolithConfig) []any {
 	if len(cfg.RegisterToken.Token) > 0 {
 		out = append(out, registertoken.New(cfg.RegisterToken))
 	}
-	out = append(out, audit.New(cfg.Audit))
+	// Audit is opt-in: only wired when a sink is configured. No Out → no
+	// per-request audit hook firing, no identity/path logging by default.
+	if cfg.Audit.Out != nil {
+		out = append(out, audit.New(cfg.Audit))
+	}
 	return out
 }
 

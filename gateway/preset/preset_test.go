@@ -2,10 +2,12 @@ package preset
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"testing"
 
 	"github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/builtin/audit"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
 	"github.com/Toyz/sov/gateway/builtin/meshsecret"
 	"github.com/Toyz/sov/gateway/builtin/registertoken"
@@ -35,6 +37,18 @@ func TestMonolith_NoGatesByDefault(t *testing.T) {
 	// Core plugins still present.
 	if !names["registry"] {
 		t.Error("registry plugin missing from Monolith set")
+	}
+}
+
+// Audit is OPT-IN: no Out → no audit hook (no per-request identity/path
+// logging by default); set Out → wired. Same as the Registry preset.
+func TestMonolith_AuditOptIn(t *testing.T) {
+	if pluginNames(Monolith(MonolithConfig{}))["audit"] {
+		t.Error("audit wired with no Audit.Out — it must be opt-in (records every dispatch + subject)")
+	}
+	cfg := MonolithConfig{Audit: audit.Config{Out: io.Discard}}
+	if !pluginNames(Monolith(cfg))["audit"] {
+		t.Error("audit not wired when Audit.Out is set")
 	}
 }
 
