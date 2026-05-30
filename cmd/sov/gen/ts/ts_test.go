@@ -39,6 +39,21 @@ func fakeCatalog() gateway.IntrospectReport {
 						Method: "ping", Title: "Ping", PostPath: "/rpc/Auth/ping", HasParams: false,
 						ResponseTypeScript: "{ ok: boolean }",
 					},
+					{
+						// Hostile/polyglot catalog: claims HasParams but ships
+						// zero param fields. The generator must still emit void
+						// (defensive len(Params) check), not a dangling type.
+						Method: "legacy", Title: "Legacy", PostPath: "/rpc/Auth/legacy", HasParams: true,
+						ResponseTypeScript: "{ ok: boolean }",
+					},
+				},
+			}},
+			// Router named "Page" → collides with the "Page" model type below.
+			"Page": {{
+				Router: "Page", Title: "Page",
+				Methods: []rpc.MethodDescriptor{
+					{Method: "get", Title: "Get", PostPath: "/rpc/Page/get", HasParams: false,
+						ResponseTypeScript: "{ id: string }"},
 				},
 			}},
 		},
@@ -51,6 +66,46 @@ func fakeCatalog() gateway.IntrospectReport {
 						Title: "Handle", Desc: "Unique handle", Example: "alice"},
 					{JSONName: "password", SchemaType: "string", Required: true},
 				},
+			},
+			// Array-of-named-struct field: TypeName carries the element type
+			// so codegen emits SearchHit[], not unknown[].
+			"SearchResult": {
+				Name:      "SearchResult",
+				ShapeHash: "def",
+				Fields: []rpc.ParamField{
+					{JSONName: "hits", SchemaType: "array", TypeName: "SearchHit", Omitempty: true},
+				},
+			},
+			"SearchHit": {
+				Name:      "SearchHit",
+				ShapeHash: "ghi",
+				Fields: []rpc.ParamField{
+					{JSONName: "id", SchemaType: "string", Required: true},
+				},
+			},
+			// Presence-based optionality cases (Required is deliberately
+			// false on every field to prove `?` is NOT driven by Required):
+			//   id        — non-omitempty non-pointer → REQUIRED (no ?)
+			//   note      — omitempty                 → optional
+			//   parent_id — nullable (pointer)        → optional
+			"Page": {
+				Name:      "Page",
+				ShapeHash: "jkl",
+				Fields: []rpc.ParamField{
+					{JSONName: "id", SchemaType: "string"},
+					{JSONName: "note", SchemaType: "string", Omitempty: true},
+					{JSONName: "parent_id", SchemaType: "string", Nullable: true},
+					// primitive-element array → string[]
+					{JSONName: "tags", SchemaType: "array", ElemType: "string", Omitempty: true},
+					// struct-element array, element type lowercase → Node[]
+					{JSONName: "kids", SchemaType: "array", ElemType: "object", TypeName: "node", Omitempty: true},
+				},
+			},
+			// Unexported Go type name → must surface capitalized as Node.
+			"node": {
+				Name:      "node",
+				ShapeHash: "nod",
+				Fields:    []rpc.ParamField{{JSONName: "id", SchemaType: "string", Required: true}},
 			},
 		},
 		CrossRefs: map[string]gateway.TypeVariants{},
@@ -130,6 +185,98 @@ func TestRun_NoParamMethodEmitsVoidNotDanglingType(t *testing.T) {
 	}
 	if strings.Contains(out, "AuthPingParams") {
 		t.Errorf("emitted a dangling AuthPingParams reference for a no-param method:\n%s", out)
+	}
+}
+
+// Defensive: a catalog that claims HasParams=true but ships zero param
+// fields (e.g. a polyglot pod) must still emit void, not a dangling type.
+func TestRun_HasParamsButNoFieldsEmitsVoid(t *testing.T) {
+	s := startCatalogServer(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--from", s.URL, "--out", "-"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "legacy: { params: void; result: AuthLegacyResult }") {
+		t.Errorf("HasParams+0-fields method did not emit void params:\n%s", out)
+	}
+	if strings.Contains(out, "AuthLegacyParams") {
+		t.Errorf("emitted dangling AuthLegacyParams for a 0-field method:\n%s", out)
+	}
+}
+
+// Bug 2: a slice-of-named-struct field must emit Elem[] (via ParamField
+// TypeName), not unknown[] — so consumers don't have to cast.
+func TestRun_ArrayOfStructFieldIsTyped(t *testing.T) {
+	s := startCatalogServer(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--from", s.URL, "--out", "-"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "hits?: SearchHit[];") {
+		t.Errorf("array-of-struct field not typed as SearchHit[]:\n%s", out)
+	}
+	if strings.Contains(out, "hits?: unknown[]") {
+		t.Errorf("array-of-struct field still emitted as unknown[]:\n%s", out)
+	}
+}
+
+// Bug 3: optionality is presence-based, not Required-based. A non-omitempty
+// non-pointer field is required even though Required=false; omitempty and
+// pointer fields are optional.
+func TestRun_PresenceBasedOptionality(t *testing.T) {
+	s := startCatalogServer(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--from", s.URL, "--out", "-"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"id: string;",         // present-always → required, no ?
+		"note?: string;",      // omitempty → optional
+		"parent_id?: string;", // pointer/nullable → optional
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in generated client:\n%s", want, out)
+		}
+	}
+	// Leading space so this doesn't false-match "parent_id?: string;".
+	if strings.Contains(out, " id?: string;") {
+		t.Errorf("present-always field id emitted optional (id?) — optionality must be presence-based:\n%s", out)
+	}
+}
+
+// Generator polish: primitive arrays typed, unexported type names
+// capitalized, and a type colliding with a router name suffixed (not
+// merged with the router class).
+func TestRun_GeneratorPolish(t *testing.T) {
+	s := startCatalogServer(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--from", s.URL, "--out", "-"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"tags?: string[];",             // primitive-element array typed
+		"kids?: Node[];",               // struct-element array, element capitalized
+		"export interface Node {",      // unexported `node` → Node
+		"export interface PageModel {", // model colliding with router Page → PageModel
+		"export class Page {",          // router keeps the bare name
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in generated client:\n%s", want, out)
+		}
+	}
+	for _, notWant := range []string{
+		"export interface Page {",  // model must NOT take the bare router name
+		"export interface node {",  // not lowercase
+		"tags?: unknown[]",         // primitive array must not be unknown[]
+		"kids?: unknown[]",         // struct array must not be unknown[]
+	} {
+		if strings.Contains(out, notWant) {
+			t.Errorf("unexpected %q in generated client:\n%s", notWant, out)
+		}
 	}
 }
 

@@ -55,8 +55,18 @@ func Emit(w io.Writer, pkg string, report *gateway.IntrospectReport) {
 	fmt.Fprintln(w, "import httpx")
 	fmt.Fprintln(w)
 
+	// Router class names — a generated TYPE (dataclass) whose identifier
+	// collides with one gets a "Model" suffix (see pyTypeIdent) so a data
+	// class never overwrites a router class of the same name.
+	routers := map[string]bool{}
+	for svc := range report.Services {
+		for _, rd := range report.Services[svc] {
+			routers[pyIdent(rd.Router)] = true
+		}
+	}
+
 	emitRuntime(w)
-	emitTypes(w, report)
+	emitTypes(w, report, routers)
 	emitRouters(w, report)
 }
 
@@ -119,7 +129,7 @@ func emitRuntime(w io.Writer) {
 	fmt.Fprintln(w)
 }
 
-func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
+func emitTypes(w io.Writer, report *gateway.IntrospectReport, routers map[string]bool) {
 	if len(report.Types) == 0 {
 		return
 	}
@@ -133,7 +143,7 @@ func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
 	for _, name := range names {
 		td := report.Types[name]
 		fmt.Fprintln(w, "@dataclass")
-		fmt.Fprintf(w, "class %s:\n", pyIdent(name))
+		fmt.Fprintf(w, "class %s:\n", pyTypeIdent(name, routers))
 		emitClassDoc(w, "    ", td.Name, "", "", "", false)
 		if len(td.Fields) == 0 {
 			fmt.Fprintln(w, "    pass")
@@ -141,11 +151,16 @@ func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
 			continue
 		}
 		// Sort fields: required first, optional last (Python rule:
-		// non-default args may not follow default args).
+		// non-default args may not follow default args). Optionality is
+		// PRESENCE-based: a field is optional iff it can be absent on the
+		// wire — omitempty (may be dropped) or a pointer (may be null/
+		// absent). A non-omitempty non-pointer field is always present, so
+		// it is required. Required (sov validation intent) does NOT drive
+		// this — it's a separate concern.
 		ordered := make([]rpc.ParamField, 0, len(td.Fields))
 		var required, optional []rpc.ParamField
 		for _, f := range td.Fields {
-			if f.Omitempty || !f.Required {
+			if f.Omitempty || f.Nullable {
 				optional = append(optional, f)
 			} else {
 				required = append(required, f)
@@ -155,8 +170,8 @@ func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
 		ordered = append(ordered, optional...)
 		for _, f := range ordered {
 			emitFieldDoc(w, "    ", f)
-			typ := pyTypeOf(f)
-			if f.Omitempty || !f.Required {
+			typ := pyTypeOf(f, routers)
+			if f.Omitempty || f.Nullable {
 				fmt.Fprintf(w, "    %s: Optional[%s] = None\n", pyFieldIdent(f.JSONName), typ)
 			} else {
 				fmt.Fprintf(w, "    %s: %s\n", pyFieldIdent(f.JSONName), typ)
@@ -287,7 +302,7 @@ func emitFieldDoc(w io.Writer, indent string, f rpc.ParamField) {
 	}
 }
 
-func pyTypeOf(f rpc.ParamField) string {
+func pyTypeOf(f rpc.ParamField, routers map[string]bool) string {
 	switch f.SchemaType {
 	case "string":
 		return "str"
@@ -298,11 +313,35 @@ func pyTypeOf(f rpc.ParamField) string {
 	case "boolean":
 		return "bool"
 	case "array":
-		return "List[Any]"
+		return "List[" + pyArrayElem(f, routers) + "]"
 	case "object":
 		if f.TypeName != "" {
-			return pyIdent(f.TypeName)
+			return pyTypeIdent(f.TypeName, routers)
 		}
+		return "Dict[str, Any]"
+	default:
+		return "Any"
+	}
+}
+
+// pyArrayElem returns the Python type of a slice element. A named struct
+// element (TypeName set) → the type ident; otherwise the element's scalar
+// schema (ElemType) maps to the SAME scalars pyTypeOf uses; anything else →
+// Any.
+func pyArrayElem(f rpc.ParamField, routers map[string]bool) string {
+	if f.TypeName != "" {
+		return pyTypeIdent(f.TypeName, routers)
+	}
+	switch f.ElemType {
+	case "string":
+		return "str"
+	case "number":
+		return "float"
+	case "integer":
+		return "int"
+	case "boolean":
+		return "bool"
+	case "object":
 		return "Dict[str, Any]"
 	default:
 		return "Any"
@@ -331,6 +370,19 @@ func pyIdent(name string) string {
 		r[0] -= 'a' - 'A'
 	}
 	return string(r)
+}
+
+// pyTypeIdent maps a catalog TYPE name to its Python class identifier,
+// suffixing "Model" when it collides with a router CLASS name. Without this
+// a data class and a router sharing a name (e.g. a `Page` model + a `Page`
+// router) would emit two `class Page` definitions — the second silently
+// shadows the first at import time.
+func pyTypeIdent(name string, routers map[string]bool) string {
+	id := pyIdent(name)
+	if routers[id] {
+		return id + "Model"
+	}
+	return id
 }
 
 func pyFieldIdent(name string) string {

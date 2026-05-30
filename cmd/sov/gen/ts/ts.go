@@ -60,13 +60,22 @@ func Emit(w io.Writer, pkg string, report *gateway.IntrospectReport) {
 	writeBlock(w, indent, preamble)
 	fmt.Fprintln(w)
 
-	emitTypes(w, indent, report)
+	// Router class names — types that collide with one get a "Model"
+	// suffix (see typeIdent) so a data type never merges with a router.
+	routers := map[string]bool{}
+	for svc := range report.Services {
+		for _, rd := range report.Services[svc] {
+			routers[tsIdent(rd.Router)] = true
+		}
+	}
+
+	emitTypes(w, indent, report, routers)
 	emitRouters(w, indent, report)
 
 	fmt.Fprintln(w, "}")
 }
 
-func emitTypes(w io.Writer, indent string, report *gateway.IntrospectReport) {
+func emitTypes(w io.Writer, indent string, report *gateway.IntrospectReport, routers map[string]bool) {
 	if len(report.Types) == 0 {
 		return
 	}
@@ -80,14 +89,19 @@ func emitTypes(w io.Writer, indent string, report *gateway.IntrospectReport) {
 	for _, name := range names {
 		td := report.Types[name]
 		emitJSDoc(w, indent, td.Name, "", "", "", false)
-		fmt.Fprintf(w, "%sexport interface %s {\n", indent, tsIdent(name))
+		fmt.Fprintf(w, "%sexport interface %s {\n", indent, typeIdent(name, routers))
 		for _, f := range td.Fields {
 			emitFieldJSDoc(w, indent+"  ", f)
+			// Presence-based optionality: a field is `?` iff it can be
+			// absent on the wire — omitempty (may be dropped) or a pointer
+			// (may be null/absent). A non-omitempty non-pointer field is
+			// always present, so it is required. Required (sov validation)
+			// does NOT drive this — it's a separate concern.
 			marker := ""
-			if f.Omitempty || !f.Required {
+			if f.Omitempty || f.Nullable {
 				marker = "?"
 			}
-			fmt.Fprintf(w, "%s  %s%s: %s;\n", indent, f.JSONName, marker, tsTypeOf(f))
+			fmt.Fprintf(w, "%s  %s%s: %s;\n", indent, f.JSONName, marker, tsTypeOf(f, routers))
 		}
 		fmt.Fprintf(w, "%s}\n\n", indent)
 	}
@@ -132,7 +146,7 @@ func emitRouters(w io.Writer, indent string, report *gateway.IntrospectReport) {
 			fmt.Fprintf(w, "%s  %s: {\n", indent, tsIdent(rd.Router))
 			for _, md := range rd.Methods {
 				resultAlias := tsIdent(rd.Router) + strs.Capitalize(md.Method) + "Result"
-				if md.HasParams {
+				if methodHasParams(md) {
 					paramAlias := tsIdent(rd.Router) + strs.Capitalize(md.Method) + "Params"
 					fmt.Fprintf(w, "%s    %s: { params: %s; result: %s };\n",
 						indent, md.Method, paramAlias, resultAlias)
@@ -169,14 +183,24 @@ func emitRouters(w io.Writer, indent string, report *gateway.IntrospectReport) {
 	fmt.Fprintf(w, "%s}\n", indent)
 }
 
+// methodHasParams reports whether the client must send a params object.
+// It double-checks len(Params) > 0 rather than trusting HasParams alone:
+// a catalog (esp. a hand-written / polyglot pod's) that reports
+// HasParams=true but ships zero param fields would otherwise make the
+// generator reference a {Router}{Method}Params type that emitTypes never
+// emits — a dangling reference that won't compile. Zero fields → void.
+func methodHasParams(md rpc.MethodDescriptor) bool {
+	return md.HasParams && len(md.Params) > 0
+}
+
 func emitMethod(w io.Writer, indent, router string, md rpc.MethodDescriptor) {
 	paramType := tsIdent(router) + strs.Capitalize(md.Method) + "Params"
 	paramArg := "p: " + paramType
-	if !md.HasParams {
+	if !methodHasParams(md) {
 		paramArg = ""
 	}
 	respType := tsIdent(router) + strs.Capitalize(md.Method) + "Result"
-	if md.HasParams {
+	if methodHasParams(md) {
 		fmt.Fprintf(w, "%sasync %s(%s): Promise<%s> {\n", indent, md.Method, paramArg, respType)
 		fmt.Fprintf(w, "%s  return this.c.call(%q, %q, p);\n", indent, router, md.Method)
 	} else {
@@ -206,7 +230,7 @@ func emitFieldJSDoc(w io.Writer, indent string, f rpc.ParamField) {
 	docgen.RenderField(w, indent, jsDocStyle, f)
 }
 
-func tsTypeOf(f rpc.ParamField) string {
+func tsTypeOf(f rpc.ParamField, routers map[string]bool) string {
 	switch f.SchemaType {
 	case "string":
 		return "string"
@@ -215,11 +239,32 @@ func tsTypeOf(f rpc.ParamField) string {
 	case "boolean":
 		return "boolean"
 	case "array":
-		return "unknown[]"
+		return tsArrayElem(f, routers) + "[]"
 	case "object":
 		if f.TypeName != "" {
-			return tsIdent(f.TypeName)
+			return typeIdent(f.TypeName, routers)
 		}
+		return "Record<string, unknown>"
+	default:
+		return "unknown"
+	}
+}
+
+// tsArrayElem returns the TS type of a slice element. A named struct
+// element (TypeName set) → the type ident; otherwise the element's scalar
+// schema (ElemType) → string/number/boolean; anything else → unknown.
+func tsArrayElem(f rpc.ParamField, routers map[string]bool) string {
+	if f.TypeName != "" {
+		return typeIdent(f.TypeName, routers)
+	}
+	switch f.ElemType {
+	case "string":
+		return "string"
+	case "number":
+		return "number"
+	case "boolean":
+		return "boolean"
+	case "object":
 		return "Record<string, unknown>"
 	default:
 		return "unknown"
@@ -228,8 +273,27 @@ func tsTypeOf(f rpc.ParamField) string {
 
 func tsIdent(name string) string {
 	// Replace dots used in generated type names (Router.MethodParams)
-	// with a flat camel-like join — TS interface names can't contain dots.
-	return strings.ReplaceAll(name, ".", "")
+	// with a flat join — TS interface names can't contain dots — and
+	// upper-case the first rune so an unexported Go type (e.g. `node`)
+	// surfaces as a conventional `Node`, consistently at decl and use.
+	id := strings.ReplaceAll(name, ".", "")
+	if id == "" {
+		return id
+	}
+	return strings.ToUpper(id[:1]) + id[1:]
+}
+
+// typeIdent maps a catalog TYPE name to its TS identifier, suffixing
+// "Model" when it collides with a router CLASS name. Without this a data
+// type and a router sharing a name (e.g. a `Page` model + a `Page` router)
+// would merge as interface+class — the router instance type would wrongly
+// gain the model's fields.
+func typeIdent(name string, routers map[string]bool) string {
+	id := tsIdent(name)
+	if routers[id] {
+		return id + "Model"
+	}
+	return id
 }
 
 func writeBlock(w io.Writer, indent, text string) {

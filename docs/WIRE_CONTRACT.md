@@ -294,8 +294,23 @@ A pod returns its own catalog so the gateway can merge it. Minimal valid body:
 ```
 
 `ParamField.schemaType ∈ {string, number, boolean, array, object}`; `position` is the positional slot
-(`-1` for none); `typeName` names the Go type when `schemaType=="object"`. `types`/`cross_refs` may be
-empty — the gateway rebuilds the org-wide catalog from merged `services`.
+(`-1` for none); `typeName` names the referenced Go type when `schemaType=="object"` OR the slice
+ELEMENT type when `schemaType=="array"` (so codegen emits `Elem[]`, not `unknown[]`). `types`/`cross_refs`
+may be empty — the gateway rebuilds the org-wide catalog from merged `services`.
+
+**Field optionality (codegen):** a field is OPTIONAL in a generated type iff it can be ABSENT on the
+wire — `omitempty` is set (may be dropped) or `nullable` is true (the Go field is a pointer → may be
+null/absent). A non-`omitempty` non-pointer field is always present and therefore REQUIRED. `required`
+is a SEPARATE, validation-only signal (`sov:"required"`) and does **not** drive optionality — a present
+field is required even when `required` is false. This rule is uniform across params and response/model
+types.
+
+**`hasParams`** is the CLIENT-facing truth — "the caller must send a params object." It reflects the
+wire-field count, not merely that the Go method takes a `*Params` struct: a method whose params struct
+has zero wire fields (empty, or every field header/owner-injected) reports `hasParams: false` and emits
+`params: void`. A polyglot pod must follow the same rule, or set `hasParams` and ship the matching
+`params` — emitting `hasParams: true` with zero `params` would make a generated client name a params
+type that was never shipped.
 
 Cascade loop-guard headers (honor these if you fan out to further pods):
 

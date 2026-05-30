@@ -67,8 +67,19 @@ func Emit(w io.Writer, pkg string, report *gateway.IntrospectReport) {
 	fmt.Fprintln(w, `import java.util.concurrent.atomic.AtomicReference`)
 	fmt.Fprintln(w)
 
+	// Router class names — a generated TYPE colliding with one gets a
+	// "Model" suffix (see ktTypeIdent) so a data class never shares an
+	// identifier with a router class (e.g. a `Page` model + a `Page`
+	// router would otherwise both declare `class Page`).
+	routers := map[string]bool{}
+	for svc := range report.Services {
+		for _, rd := range report.Services[svc] {
+			routers[ktIdent(rd.Router)] = true
+		}
+	}
+
 	emitRuntime(w)
-	emitTypes(w, report)
+	emitTypes(w, report, routers)
 	emitRouters(w, report)
 }
 
@@ -141,7 +152,7 @@ func emitRuntime(w io.Writer) {
 	fmt.Fprintln(w)
 }
 
-func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
+func emitTypes(w io.Writer, report *gateway.IntrospectReport, routers map[string]bool) {
 	if len(report.Types) == 0 {
 		return
 	}
@@ -156,25 +167,26 @@ func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
 		td := report.Types[name]
 		emitKDoc(w, "", td.Name, "", "", "", false)
 		fmt.Fprintln(w, "@Serializable")
-		ident := ktIdent(name)
+		ident := ktTypeIdent(name, routers)
 		if len(td.Fields) == 0 {
 			fmt.Fprintf(w, "class %s\n\n", ident)
 			continue
 		}
 		fmt.Fprintf(w, "data class %s(\n", ident)
-		for i, f := range td.Fields {
+		for _, f := range td.Fields {
 			emitFieldKDoc(w, "    ", f)
-			optional := f.Omitempty || !f.Required
-			typ := ktTypeOf(f)
+			// Presence-based optionality: a field is nullable (T? = null)
+			// iff it can be absent on the wire — omitempty (may be dropped)
+			// or a pointer (may be null/absent). A non-omitempty non-pointer
+			// field is always present, so it is non-nullable with no default.
+			// Required (sov validation) does NOT drive this.
+			optional := f.Omitempty || f.Nullable
+			typ := ktTypeOf(f, routers)
 			line := fmt.Sprintf("    @SerialName(%q) val %s: %s", f.JSONName, ktFieldIdent(f.JSONName), typ)
 			if optional {
 				line += "? = null"
 			}
-			if i < len(td.Fields)-1 {
-				line += ","
-			} else {
-				line += ","
-			}
+			line += ","
 			fmt.Fprintln(w, line)
 		}
 		fmt.Fprintln(w, ")")
@@ -256,7 +268,7 @@ func emitFieldKDoc(w io.Writer, indent string, f rpc.ParamField) {
 }
 
 // ktTypeOf maps a ParamField.SchemaType to a Kotlin type literal.
-func ktTypeOf(f rpc.ParamField) string {
+func ktTypeOf(f rpc.ParamField, routers map[string]bool) string {
 	switch f.SchemaType {
 	case "string":
 		return "String"
@@ -267,11 +279,33 @@ func ktTypeOf(f rpc.ParamField) string {
 	case "boolean":
 		return "Boolean"
 	case "array":
-		return "List<JsonElement>"
+		return "List<" + ktArrayElem(f, routers) + ">"
 	case "object":
 		if f.TypeName != "" {
-			return ktIdent(f.TypeName)
+			return ktTypeIdent(f.TypeName, routers)
 		}
+		return "Map<String, JsonElement>"
+	default:
+		return "JsonElement"
+	}
+}
+
+// ktArrayElem returns the Kotlin type of a slice element. A named struct
+// element (TypeName set) → the type ident; otherwise the element's scalar
+// schema (ElemType) → String/Double/Boolean/object map, mirroring the
+// scalar mappings ktTypeOf uses; anything else → JsonElement.
+func ktArrayElem(f rpc.ParamField, routers map[string]bool) string {
+	if f.TypeName != "" {
+		return ktTypeIdent(f.TypeName, routers)
+	}
+	switch f.ElemType {
+	case "string":
+		return "String"
+	case "number":
+		return "Double"
+	case "boolean":
+		return "Boolean"
+	case "object":
 		return "Map<String, JsonElement>"
 	default:
 		return "JsonElement"
@@ -303,6 +337,19 @@ func ktIdent(name string) string {
 		r[0] -= 'a' - 'A'
 	}
 	return string(r)
+}
+
+// ktTypeIdent maps a catalog TYPE name to its Kotlin class identifier,
+// suffixing "Model" when it collides with a router CLASS name. Without
+// this a data class and a router class sharing a name (e.g. a `Page`
+// model + a `Page` router) would both declare `class Page` and fail to
+// compile. The router class keeps the bare name; only the type yields.
+func ktTypeIdent(name string, routers map[string]bool) string {
+	id := ktIdent(name)
+	if routers[id] {
+		return id + "Model"
+	}
+	return id
 }
 
 func ktFieldIdent(name string) string {

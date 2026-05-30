@@ -49,8 +49,18 @@ func Emit(w io.Writer, pkg string, report *gateway.IntrospectReport) {
 	fmt.Fprintf(w, "public enum %s {\n", swIdent(pkg))
 	fmt.Fprintln(w)
 
+	// Router class names — a generated TYPE that collides with one gets a
+	// "Model" suffix (see swTypeIdent) so a data struct never collides with
+	// a router class of the same name.
+	routers := map[string]bool{}
+	for svc := range report.Services {
+		for _, rd := range report.Services[svc] {
+			routers[swIdent(rd.Router)] = true
+		}
+	}
+
 	emitRuntime(w)
-	emitTypes(w, report)
+	emitTypes(w, report, routers)
 	emitRouters(w, report)
 
 	fmt.Fprintln(w, "}")
@@ -130,7 +140,7 @@ func emitRuntime(w io.Writer) {
 	fmt.Fprintln(w)
 }
 
-func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
+func emitTypes(w io.Writer, report *gateway.IntrospectReport, routers map[string]bool) {
 	if len(report.Types) == 0 {
 		return
 	}
@@ -144,12 +154,16 @@ func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
 	for _, name := range names {
 		td := report.Types[name]
 		emitDocComment(w, "    ", td.Name, "", "", "", false)
-		fmt.Fprintf(w, "    public struct %s: Codable {\n", swIdent(name))
+		fmt.Fprintf(w, "    public struct %s: Codable {\n", swTypeIdent(name, routers))
 		// Field declarations.
 		for _, f := range td.Fields {
 			emitFieldDoc(w, "        ", f)
-			optional := f.Omitempty || !f.Required
-			typ := swTypeOf(f)
+			// Presence-based optionality: a field is optional (`T?`) iff it
+			// can be absent on the wire — omitempty (may be dropped) or a
+			// pointer (may be null/absent). Required is sov VALIDATION only
+			// and does NOT drive wire-presence, so it is not consulted here.
+			optional := f.Omitempty || f.Nullable
+			typ := swTypeOf(f, routers)
 			if optional {
 				typ += "?"
 			}
@@ -167,8 +181,8 @@ func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
 		if len(td.Fields) > 0 {
 			fmt.Fprint(w, "        public init(")
 			for i, f := range td.Fields {
-				optional := f.Omitempty || !f.Required
-				typ := swTypeOf(f)
+				optional := f.Omitempty || f.Nullable
+				typ := swTypeOf(f, routers)
 				if optional {
 					typ += "?"
 				}
@@ -231,6 +245,16 @@ func emitRouter(w io.Writer, rd rpc.RouterDescriptor) {
 	fmt.Fprintln(w)
 }
 
+// methodHasParams reports whether the client must send a params struct.
+// It double-checks len(Params) > 0 rather than trusting HasParams alone:
+// a catalog that reports HasParams=true but ships zero param fields would
+// otherwise make the generator reference a {Router}{Method}Params struct
+// that emitTypes never emits — a dangling reference that won't compile.
+// Zero fields → no-arg method posting Empty().
+func methodHasParams(md rpc.MethodDescriptor) bool {
+	return md.HasParams && len(md.Params) > 0
+}
+
 func emitMethod(w io.Writer, router string, md rpc.MethodDescriptor) {
 	respType := responseTypeName(md)
 	resultDecl := respType
@@ -242,7 +266,7 @@ func emitMethod(w io.Writer, router string, md rpc.MethodDescriptor) {
 		resultDecodeType = "[String: String]"
 	}
 	paramType := swIdent(router) + strs.Capitalize(md.Method) + "Params"
-	if md.HasParams {
+	if methodHasParams(md) {
 		fmt.Fprintf(w, "        public func %s(_ p: %s) async throws -> %s {\n", md.Method, paramType, resultDecl)
 		fmt.Fprintf(w, "            try await client.call(%q, %q, args: p) as %s\n", router, md.Method, resultDecodeType)
 		fmt.Fprintln(w, "        }")
@@ -270,7 +294,7 @@ func emitFieldDoc(w io.Writer, indent string, f rpc.ParamField) {
 	docgen.RenderField(w, indent, swDocStyle, f)
 }
 
-func swTypeOf(f rpc.ParamField) string {
+func swTypeOf(f rpc.ParamField, routers map[string]bool) string {
 	switch f.SchemaType {
 	case "string":
 		return "String"
@@ -281,15 +305,36 @@ func swTypeOf(f rpc.ParamField) string {
 	case "boolean":
 		return "Bool"
 	case "array":
-		// Without an item schema we don't know element shape; emit a
-		// loosely-typed array of strings so the file compiles. Real
-		// arrays of named types come through as object+TypeName which
-		// is the wrapping struct's responsibility.
-		return "[String]"
+		return "[" + swArrayElem(f, routers) + "]"
 	case "object":
 		if f.TypeName != "" {
-			return swIdent(f.TypeName)
+			return swTypeIdent(f.TypeName, routers)
 		}
+		return "[String: String]"
+	default:
+		return "String"
+	}
+}
+
+// swArrayElem returns the Swift type of a slice element. A named struct
+// element (TypeName set) → the type ident; otherwise the element's scalar
+// schema (ElemType) maps to the SAME Swift scalars swTypeOf uses for
+// string/number/boolean/object; anything else falls back to String so the
+// file still compiles.
+func swArrayElem(f rpc.ParamField, routers map[string]bool) string {
+	if f.TypeName != "" {
+		return swTypeIdent(f.TypeName, routers)
+	}
+	switch f.ElemType {
+	case "string":
+		return "String"
+	case "number":
+		return "Double"
+	case "integer":
+		return "Int64"
+	case "boolean":
+		return "Bool"
+	case "object":
 		return "[String: String]"
 	default:
 		return "String"
@@ -318,6 +363,19 @@ func swIdent(name string) string {
 		r[0] -= 'a' - 'A'
 	}
 	return string(r)
+}
+
+// swTypeIdent maps a catalog TYPE name to its Swift identifier, suffixing
+// "Model" when it collides with a router CLASS name. Without this a data
+// struct and a router class sharing a name (e.g. a `Page` model + a `Page`
+// router) would both declare `struct/class Page` in the same enum scope —
+// a redeclaration that won't compile.
+func swTypeIdent(name string, routers map[string]bool) string {
+	id := swIdent(name)
+	if routers[id] {
+		return id + "Model"
+	}
+	return id
 }
 
 func swFieldIdent(name string) string {

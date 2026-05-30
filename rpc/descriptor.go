@@ -6,11 +6,24 @@ type ParamField struct {
 	JSONName     string `json:"jsonName"`
 	SchemaType   string `json:"schemaType"`             // OpenAPI-shaped: string|number|boolean|array|object
 	DesignerHint string `json:"designerHint,omitempty"` // short human label
-	Required     bool   `json:"required"`               // false when omitempty was set
+	Required     bool   `json:"required"`               // sov:"required" VALIDATION intent — NOT wire presence
 	Position     int    `json:"position"`               // -1 = no positional slot
 	Omitempty    bool   `json:"omitempty,omitempty"`
-	Deprecated   bool   `json:"deprecated,omitempty"`
-	TypeName     string `json:"typeName,omitempty"` // Go type name when SchemaType=="object" — feeds the type catalog
+	// Nullable is true when the Go field is a pointer — it may be absent or
+	// null on the wire. With Omitempty it drives codegen optionality: a
+	// field is OPTIONAL in the generated type iff it can be absent
+	// (Omitempty || Nullable); a non-omitempty non-pointer field is always
+	// present and so required. (Required is validation-only and does NOT
+	// imply presence — see the optionality note in WIRE_CONTRACT.)
+	Nullable   bool   `json:"nullable,omitempty"`
+	Deprecated bool   `json:"deprecated,omitempty"`
+	TypeName   string `json:"typeName,omitempty"` // Go type name when SchemaType=="object", OR the NAMED slice-element type when SchemaType=="array"
+	// ElemType is the element's OpenAPI schema when SchemaType=="array"
+	// (string|number|boolean|object|array). Lets codegen type a primitive
+	// slice ([]string → string[]) instead of falling back to unknown[].
+	// For arrays of named structs, TypeName carries the element type name
+	// and ElemType=="object".
+	ElemType string `json:"elemType,omitempty"`
 
 	// Human-facing metadata from the sov tag `key=value` pairs.
 	// Surfaced by the explorer UI + codegen JSDoc; ignored by dispatch.

@@ -1,9 +1,55 @@
 package rpc
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
+
+// describeFieldMap must record wire PRESENCE: Nullable for pointer fields,
+// Omitempty for json:",omitempty" — independent of sov validation Required.
+// A plain non-omitempty non-pointer field is present-always (codegen emits
+// it required even though Required=false).
+func TestDescribeFields_NullableAndPresence(t *testing.T) {
+	type RespShape struct {
+		ID   string  `json:"id"`             // always present
+		Note string  `json:"note,omitempty"` // may be dropped
+		Ptr  *string `json:"ptr"`            // may be null/absent
+	}
+	got := map[string]ParamField{}
+	for _, f := range describeStructFields(reflect.TypeOf(RespShape{})) {
+		got[f.JSONName] = f
+	}
+	if f := got["id"]; f.Omitempty || f.Nullable {
+		t.Errorf("id: omitempty=%v nullable=%v; want both false (present-always)", f.Omitempty, f.Nullable)
+	}
+	if f := got["note"]; !f.Omitempty {
+		t.Errorf("note: omitempty=false; want true")
+	}
+	if f := got["ptr"]; !f.Nullable {
+		t.Errorf("ptr: nullable=false; want true (pointer field)")
+	}
+}
+
+// Array fields must carry element typing so codegen emits typed arrays:
+// ElemType (the element's OpenAPI schema) for primitives, plus TypeName
+// (the element type name) for slices of named structs.
+func TestDescribeFields_ArrayElementTyping(t *testing.T) {
+	type ArrShape struct {
+		Tags []string `json:"tags"`
+		Hits []Widget `json:"hits"`
+	}
+	got := map[string]ParamField{}
+	for _, f := range describeStructFields(reflect.TypeOf(ArrShape{})) {
+		got[f.JSONName] = f
+	}
+	if f := got["tags"]; f.SchemaType != "array" || f.ElemType != "string" || f.TypeName != "" {
+		t.Errorf("tags: schema=%q elem=%q typeName=%q; want array/string/\"\"", f.SchemaType, f.ElemType, f.TypeName)
+	}
+	if f := got["hits"]; f.SchemaType != "array" || f.ElemType != "object" || f.TypeName != "Widget" {
+		t.Errorf("hits: schema=%q elem=%q typeName=%q; want array/object/Widget", f.SchemaType, f.ElemType, f.TypeName)
+	}
+}
 
 type ListReq struct {
 	Limit  int      `json:"limit,omitempty"`

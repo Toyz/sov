@@ -77,7 +77,18 @@ func Emit(w io.Writer, pkg string, report *gateway.IntrospectReport, withHTTP bo
 	fmt.Fprintln(w, "}")
 	fmt.Fprintln(w)
 
-	emitTypes(w, report)
+	// Router interface names — a generated TYPE that collides with one
+	// gets a "Model" suffix (see goTypeIdent). A Go file can't declare both
+	// `type Page interface` (router) and `type Page struct` (model), so the
+	// model yields the name to the router and becomes PageModel.
+	routers := map[string]bool{}
+	for svc := range report.Services {
+		for _, rd := range report.Services[svc] {
+			routers[goIdent(rd.Router)] = true
+		}
+	}
+
+	emitTypes(w, report, routers)
 	emitInterfaces(w, report)
 	if withHTTP {
 		emitHTTPCaller(w)
@@ -176,7 +187,7 @@ func emitHTTPCaller(w io.Writer) {
 	fmt.Fprintln(w, `}`)
 }
 
-func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
+func emitTypes(w io.Writer, report *gateway.IntrospectReport, routers map[string]bool) {
 	if len(report.Types) == 0 {
 		return
 	}
@@ -189,13 +200,13 @@ func emitTypes(w io.Writer, report *gateway.IntrospectReport) {
 	fmt.Fprintln(w)
 	for _, name := range names {
 		td := report.Types[name]
-		fmt.Fprintf(w, "type %s struct {\n", goIdent(name))
+		fmt.Fprintf(w, "type %s struct {\n", goTypeIdent(name, routers))
 		for _, f := range td.Fields {
 			tag := f.JSONName
 			if f.Omitempty {
 				tag += ",omitempty"
 			}
-			fmt.Fprintf(w, "\t%s %s `json:\"%s\"`\n", strs.Capitalize(f.JSONName), goTypeOf(f), tag)
+			fmt.Fprintf(w, "\t%s %s `json:\"%s\"`\n", strs.Capitalize(f.JSONName), goTypeOf(f, routers), tag)
 		}
 		fmt.Fprintln(w, "}")
 		fmt.Fprintln(w)
@@ -248,14 +259,15 @@ func emitClientMethod(w io.Writer, typeName, service string, md *rpc.MethodDescr
 	hasResult := resultType != ""
 	fmt.Fprintf(w, "func (c *%s) %s(ctx context.Context%s) %s {\n",
 		typeName, strs.Capitalize(md.Method), paramsArg(service, *md), returnTypes(*md))
+	hasParams := methodHasParams(*md)
 	switch {
-	case md.HasParams && hasResult:
+	case hasParams && hasResult:
 		fmt.Fprintf(w, "\tvar out %s\n", resultType)
 		fmt.Fprintf(w, "\tif err := c.c.Call(ctx, %q, %q, p, &out); err != nil {\n", service, md.Method)
 		fmt.Fprintln(w, "\t\treturn nil, err")
 		fmt.Fprintln(w, "\t}")
 		fmt.Fprintln(w, "\treturn &out, nil")
-	case md.HasParams:
+	case hasParams:
 		fmt.Fprintf(w, "\treturn c.c.Call(ctx, %q, %q, p, nil)\n", service, md.Method)
 	case hasResult:
 		fmt.Fprintf(w, "\tvar out %s\n", resultType)
@@ -270,8 +282,18 @@ func emitClientMethod(w io.Writer, typeName, service string, md *rpc.MethodDescr
 	fmt.Fprintln(w)
 }
 
+// methodHasParams reports whether the client must send a params object.
+// Like the ts generator it double-checks len(Params) > 0 rather than
+// trusting HasParams alone: a polyglot/hand-written catalog that reports
+// HasParams=true but ships zero param fields would otherwise make the
+// generator reference a {Router}{Method}Params type that emitTypes never
+// emits — a dangling reference that won't compile. Zero fields → no arg.
+func methodHasParams(md rpc.MethodDescriptor) bool {
+	return md.HasParams && len(md.Params) > 0
+}
+
 func paramsArg(router string, md rpc.MethodDescriptor) string {
-	if !md.HasParams {
+	if !methodHasParams(md) {
 		return ""
 	}
 	return fmt.Sprintf(", p *%s%sParams", goIdent(router), strs.Capitalize(md.Method))
@@ -312,7 +334,31 @@ func goIdent(s string) string {
 	return string(r)
 }
 
-func goTypeOf(f rpc.ParamField) string {
+// goTypeIdent maps a catalog TYPE name to its Go identifier, suffixing
+// "Model" when it collides with a router interface name. Without this a
+// model struct and a router interface sharing a name (e.g. a `Page` model
+// + a `Page` router) would both try to declare `type Page` in one file —
+// a compile error. The router keeps the bare name; the model yields.
+func goTypeIdent(name string, routers map[string]bool) string {
+	id := goIdent(name)
+	if routers[id] {
+		return id + "Model"
+	}
+	return id
+}
+
+func goTypeOf(f rpc.ParamField, routers map[string]bool) string {
+	t := goBaseTypeOf(f, routers)
+	// Nullable (Go source field is a pointer): emit a pointer so absence
+	// round-trips, keeping omitempty for the wire. Slices and maps are
+	// already nil-able reference types — don't double-pointer them.
+	if f.Nullable && !strings.HasPrefix(t, "[]") && !strings.HasPrefix(t, "map[") && !strings.HasPrefix(t, "*") {
+		t = "*" + t
+	}
+	return t
+}
+
+func goBaseTypeOf(f rpc.ParamField, routers map[string]bool) string {
 	switch f.SchemaType {
 	case "string":
 		return "string"
@@ -323,11 +369,36 @@ func goTypeOf(f rpc.ParamField) string {
 	case "boolean":
 		return "bool"
 	case "array":
-		return "[]any"
+		return "[]" + goArrayElem(f, routers)
 	case "object":
 		if f.TypeName != "" {
-			return "*" + goIdent(f.TypeName)
+			return "*" + goTypeIdent(f.TypeName, routers)
 		}
+		return "map[string]any"
+	default:
+		return "any"
+	}
+}
+
+// goArrayElem returns the Go type of a slice element. A named struct
+// element (TypeName set) → a pointer to the (collision-aware) type ident,
+// mirroring how object fields render; otherwise the element's scalar
+// schema (ElemType) maps to the same scalar Go types goBaseTypeOf uses;
+// anything else → any.
+func goArrayElem(f rpc.ParamField, routers map[string]bool) string {
+	if f.TypeName != "" {
+		return "*" + goTypeIdent(f.TypeName, routers)
+	}
+	switch f.ElemType {
+	case "string":
+		return "string"
+	case "number":
+		return "float64"
+	case "integer":
+		return "int64"
+	case "boolean":
+		return "bool"
+	case "object":
 		return "map[string]any"
 	default:
 		return "any"

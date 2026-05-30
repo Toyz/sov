@@ -138,6 +138,7 @@ func describeFieldMap(fm *FieldMap) []ParamField {
 			Required:     f.Required,
 			Position:     f.Position,
 			Omitempty:    f.Omitempty,
+			Nullable:     f.Type != nil && f.Type.Kind() == reflect.Ptr,
 			Deprecated:   f.Deprecated,
 			Title:        f.Title,
 			Desc:         f.Desc,
@@ -148,6 +149,7 @@ func describeFieldMap(fm *FieldMap) []ParamField {
 			pf.TypeName = nestedTypeName(f.Type)
 		} else if st == "array" {
 			pf.TypeName = elemTypeName(f.Type)
+			pf.ElemType = elemSchemaType(f.Type)
 		}
 		// Stdlib types stay out of the catalog — clear TypeName so
 		// codegen falls back to the scalar type instead of emitting a
@@ -270,6 +272,23 @@ func isStdlibType(t reflect.Type) bool {
 		}
 	}
 	return true
+}
+
+// elemSchemaType returns the OpenAPI schema string of a slice/array's
+// element (string|number|boolean|object|array), or "" when t is not a
+// slice/array. Pointers (on the slice and on the element) are unwrapped so
+// []*Foo and *[]Foo both resolve to the element schema.
+func elemSchemaType(t reflect.Type) string {
+	if t == nil {
+		return ""
+	}
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Slice && t.Kind() != reflect.Array {
+		return ""
+	}
+	return openAPITypeString(t.Elem())
 }
 
 // elemTypeName returns the named element type of a slice/array, or "".
