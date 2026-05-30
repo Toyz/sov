@@ -33,6 +33,44 @@ func (r *WidgetRouter) Get(ctx *Context, p *struct {
 	return &Widget{}, nil
 }
 
+// EmptyParams is a params struct with zero wire fields — e.g. a method
+// whose inputs all arrive via context/headers, or an intentional
+// placeholder. The Go signature takes *EmptyParams (so the engine's
+// hasParams is true and dispatch still allocates it), but the client sends
+// nothing on the wire.
+type EmptyParams struct{}
+
+type NoFieldRouter struct{}
+
+// Tree takes a params struct with no wire fields.
+func (r *NoFieldRouter) Tree(ctx *Context, p *EmptyParams) (*Widget, error) { return &Widget{}, nil }
+
+// Ping takes no params struct at all.
+func (r *NoFieldRouter) Ping(ctx *Context) (*Widget, error) { return &Widget{}, nil }
+
+// Regression: a method taking a zero-wire-field params struct must report
+// HasParams=false. Otherwise the type catalog (emits a request type only
+// when len(Params) > 0) and every codegen backend (references
+// {Router}{Method}Params whenever HasParams) disagree, and the generated
+// client names a params interface that was never emitted — a dangling
+// reference that won't compile. (Bug: `sov gen ts` against a no-arg method.)
+func TestDescribe_ZeroFieldParamsIsNotHasParams(t *testing.T) {
+	e := NewEngine()
+	e.Register(&NoFieldRouter{})
+	out := e.Describe()
+	if len(out) != 1 {
+		t.Fatalf("routers = %d", len(out))
+	}
+	for _, m := range out[0].Methods {
+		if m.HasParams {
+			t.Errorf("%s: HasParams=true with %d wire fields; a zero-field params struct must report HasParams=false", m.Method, len(m.Params))
+		}
+		if len(m.Params) != 0 {
+			t.Errorf("%s: expected 0 params, got %#v", m.Method, m.Params)
+		}
+	}
+}
+
 func TestDescribe_BuildsRouterAndMethodInfo(t *testing.T) {
 	e := NewEngine()
 	e.Register(&WidgetRouter{})

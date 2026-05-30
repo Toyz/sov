@@ -31,6 +31,14 @@ func fakeCatalog() gateway.IntrospectReport {
 						RequestTypeScript:  "{ handle: string; password: string }",
 						ResponseTypeScript: "{ token: string; subject: string }",
 					},
+					{
+						// No-param method: HasParams false, no Params, and
+						// (critically) NO "Auth.PingParams" entry in Types.
+						// The generator must emit `params: void` + a no-arg
+						// method, never reference an AuthPingParams type.
+						Method: "ping", Title: "Ping", PostPath: "/rpc/Auth/ping", HasParams: false,
+						ResponseTypeScript: "{ ok: boolean }",
+					},
 				},
 			}},
 		},
@@ -97,6 +105,31 @@ func TestRun_StdoutEmitsClient(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in generated client", want)
 		}
+	}
+}
+
+// Regression: a no-param method must emit `params: void` and a no-arg
+// method, and must NOT reference an undefined {Router}{Method}Params type.
+// (Bug: `sov gen ts` against a method taking a zero-field params struct
+// referenced AuthDeleteAccountParams/PageTreeParams that were never
+// emitted → the client didn't compile.)
+func TestRun_NoParamMethodEmitsVoidNotDanglingType(t *testing.T) {
+	s := startCatalogServer(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--from", s.URL, "--out", "-"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit=%d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"ping: { params: void; result: AuthPingResult }", // Services catalog
+		"async ping(): Promise<AuthPingResult>",          // no-arg router method
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in generated client", want)
+		}
+	}
+	if strings.Contains(out, "AuthPingParams") {
+		t.Errorf("emitted a dangling AuthPingParams reference for a no-param method:\n%s", out)
 	}
 }
 

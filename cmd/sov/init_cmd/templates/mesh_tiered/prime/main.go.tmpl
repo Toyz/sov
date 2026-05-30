@@ -10,7 +10,6 @@ import (
 	"os"
 
 	"github.com/Toyz/sov"
-	"github.com/Toyz/sov/gateway/builtin/audit"
 	"github.com/Toyz/sov/gateway/builtin/hmacseal"
 	"github.com/Toyz/sov/gateway/builtin/meshsecret"
 	"github.com/Toyz/sov/gateway/builtin/registry"
@@ -27,7 +26,6 @@ func main() {
 		Registry:   registry.Config{AllowedNames: []string{"Echo"}},
 		HMACSeal:   hmacseal.Config{Secret: []byte(os.Getenv("SOV_HMAC_SECRET"))},
 		MeshSecret: meshsecret.Config{Secret: []byte(os.Getenv("SOV_MESH_SECRET"))},
-		Audit:      audit.Config{Out: os.Stdout},
 	}, sov.WithAdvertiseURL(advertiseURL))
 
 	log.Printf("{{.Project}} prime gateway on %s", addr)

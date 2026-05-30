@@ -32,10 +32,9 @@ func (e *Engine) Describe() []RouterDescriptor {
 		for _, w := range names {
 			ent := methods[w]
 			md := MethodDescriptor{
-				Method:    ent.wireName,
-				Title:     OperationTitle(ent.goName),
-				PostPath:  fmt.Sprintf("/rpc/%s/%s", routerName, ent.wireName),
-				HasParams: ent.hasParams,
+				Method:   ent.wireName,
+				Title:    OperationTitle(ent.goName),
+				PostPath: fmt.Sprintf("/rpc/%s/%s", routerName, ent.wireName),
 			}
 			// Visibility: marker-method (router-wide) OR sov sentinel
 			// (per-method) declarations both feed the flags; hard wins.
@@ -61,6 +60,17 @@ func (e *Engine) Describe() []RouterDescriptor {
 					}
 				}
 			}
+			// HasParams is the CLIENT-facing truth: "the caller must send a
+			// params object". It reflects the wire-field count, NOT merely
+			// whether a *Params struct exists in the Go signature. A method
+			// taking a params struct with zero wire fields (empty struct, or
+			// every field header/owner-injected) sends nothing on the wire,
+			// so HasParams is false — otherwise the type catalog (which only
+			// emits a request type when len(Params) > 0) and the codegen
+			// (which references {Router}{Method}Params when HasParams) would
+			// disagree, and the generated client would name a params type
+			// that was never emitted (dangling reference → won't compile).
+			md.HasParams = len(md.Params) > 0
 			md.RequestTypeScript, md.ResponseTypeScript = TSPreviewForMethod(ent)
 			// Reflect the response type into the catalog too, so the
 			// type ownership convention (owner = the service that RETURNS
