@@ -32,6 +32,14 @@ type Config struct {
 	IntrospectProbeTimeout time.Duration
 	HealthProbeTimeout     time.Duration
 	AllowedNames           []string
+	// DisableRegister suppresses the /rpc/_register endpoint entirely — the
+	// gateway 404s it (pod shape). For a MONOLITH that hosts every service
+	// in-process and accepts no remote joins: a live _register there is pure
+	// attack surface with no function (a locked door on a wall with no room
+	// behind it), so the right default is no door, not a long key. The
+	// public /health route and federation/health/introspect aggregation are
+	// unaffected. Leave false for Hybrid/Registry shapes that accept joins.
+	DisableRegister bool
 }
 
 // ttlMultiplier sets a registration's TTL to heartbeat × 3, so a pod can
@@ -44,6 +52,7 @@ type Plugin struct {
 	introspectProbeTimeout time.Duration
 	healthProbeTimeout     time.Duration
 	allowed                map[string]struct{}
+	disableRegister        bool
 }
 
 // New returns the registry plugin from cfg.
@@ -64,6 +73,7 @@ func New(cfg Config) *Plugin {
 		introspectProbeTimeout: cfg.IntrospectProbeTimeout,
 		healthProbeTimeout:     cfg.HealthProbeTimeout,
 		allowed:                allow,
+		disableRegister:        cfg.DisableRegister,
 	}
 }
 
@@ -149,6 +159,11 @@ func (p *Plugin) registerGated(g *gateway.Gateway) bool {
 // surprise. Silence it with Registry.AllowedNames, or by registering the
 // registertoken / meshsecret join-gate plugin.
 func (p *Plugin) ValidateBoot(g *gateway.Gateway) error {
+	// No endpoint, no warning: a monolith with _register disabled has
+	// nothing to gate.
+	if p.disableRegister {
+		return nil
+	}
 	if !p.registerGated(g) {
 		g.Log().Warn("registry: /rpc/_register is OPEN — any reachable actor can self-register a service and receive routed traffic. " +
 			"Set a join gate before exposing this gateway on an untrusted network: registertoken.Config{Token:...}, " +
@@ -157,10 +172,14 @@ func (p *Plugin) ValidateBoot(g *gateway.Gateway) error {
 	return nil
 }
 
-// RoutePatterns claims the registry surface. The /rpc/_register and
-// public /health routes are owned entirely; /rpc/_introspect stays
-// framework-owned (aggregator move deferred).
+// RoutePatterns claims the registry surface. The public /health route is
+// always owned; /rpc/_register is owned only when joins are accepted —
+// with DisableRegister it is NOT claimed, so the gateway 404s it (pod
+// shape). /rpc/_introspect stays framework-owned.
 func (p *Plugin) RoutePatterns() []string {
+	if p.disableRegister {
+		return []string{"/health"}
+	}
 	return []string{"/rpc/_register", "/health"}
 }
 

@@ -61,8 +61,20 @@ type Response struct {
 	// Header carries response headers (Content-Type etc.). Server merges
 	// these onto its response.
 	Header Header
-	// Body is the response payload.
+	// Body is the response payload. Ignored when Stream is set.
 	Body []byte
+	// Stream, when non-nil, is written to the client incrementally
+	// (constant memory) INSTEAD of Body — for large or open-ended payloads
+	// a RouteHandler plugin produces without buffering: a zip export, a
+	// file download, a server-sent-event feed. The adapter io.Copy's it to
+	// the wire (chunked transfer; no Content-Length) and, if it also
+	// implements io.Closer, closes it when done.
+	//
+	// Streaming is a RouteHandler-plugin concern. RPC methods return
+	// (T, error) and are enveloped as buffered JSON — they cannot stream.
+	// Set Content-Type in Header (e.g. "application/zip"); the adapter does
+	// not guess it for a stream. See PipeStream for the writer-callback form.
+	Stream io.Reader
 	// Mode is the dispatch-mode hint set by the gateway's internal
 	// dispatch path (local/remote/federated/framework/plugin). Surfaces
 	// in DispatchEvent.Mode for observability. Plugins that build a

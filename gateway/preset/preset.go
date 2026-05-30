@@ -74,9 +74,22 @@ type MonolithConfig struct {
 // endpoint is OPEN unless one of the join gates (MeshSecret/RegisterToken)
 // or Registry.AllowedNames is set.
 func Monolith(cfg MonolithConfig) []any {
+	// A monolith hosts every service in-process and accepts NO remote
+	// joins, so /rpc/_register is closed (404) — a live join endpoint there
+	// is pure attack surface with no function. Use Hybrid for a gateway
+	// that also accepts pod self-registration.
+	return monolithSet(cfg, true)
+}
+
+// monolithSet builds the shared Monolith/Hybrid plugin set. disableRegister
+// is the only difference: a monolith closes /rpc/_register, a hybrid leaves
+// it open (gate it via MeshSecret/RegisterToken/Registry.AllowedNames).
+func monolithSet(cfg MonolithConfig, disableRegister bool) []any {
+	regCfg := cfg.Registry
+	regCfg.DisableRegister = disableRegister
 	out := []any{
 		requestid.New(cfg.RequestID),
-		registry.New(cfg.Registry),
+		registry.New(regCfg),
 		batch.New(cfg.Batch),
 		cors.New(cfg.Cors),
 	}
@@ -172,8 +185,11 @@ func Registry(cfg RegistryConfig) []any {
 //	})
 type HybridConfig = MonolithConfig
 
-// Hybrid returns the plugin set for a hybrid gateway.
-func Hybrid(cfg HybridConfig) []any { return Monolith(cfg) }
+// Hybrid returns the plugin set for a hybrid gateway. Unlike Monolith it
+// leaves /rpc/_register OPEN so remote pods can self-register alongside the
+// in-process services — set a join gate (MeshSecret/RegisterToken/
+// Registry.AllowedNames) before exposing it on an untrusted network.
+func Hybrid(cfg HybridConfig) []any { return monolithSet(cfg, false) }
 
 // NewMonolith returns a gateway pre-loaded with the Monolith preset.
 // Equivalent to:

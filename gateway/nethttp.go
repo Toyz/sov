@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -161,6 +162,22 @@ func (s *NetHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
 	for k, v := range resp.Header {
 		w.Header().Set(k, v)
 	}
+
+	// Streaming response: copy incrementally (constant memory) with no
+	// Content-Length, so net/http chunk-encodes and flushes as the reader
+	// produces. The plugin owns Content-Type (we don't guess it for a
+	// stream). Close the reader when done — including on a client-side
+	// disconnect, which surfaces as an io.Copy error — so a PipeStream
+	// producer goroutine unblocks instead of leaking.
+	if resp.Stream != nil {
+		w.WriteHeader(resp.Status)
+		_, _ = io.Copy(w, resp.Stream)
+		if c, ok := resp.Stream.(io.Closer); ok {
+			_ = c.Close()
+		}
+		return
+	}
+
 	if _, ok := resp.Header["Content-Type"]; !ok {
 		w.Header().Set("Content-Type", "application/json")
 	}

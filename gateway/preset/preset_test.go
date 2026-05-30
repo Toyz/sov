@@ -129,3 +129,30 @@ func TestHybrid_RegisterTokenClosesTheHoleEndToEnd(t *testing.T) {
 		t.Errorf("gated hybrid rejected _register with CORRECT token: status=%d", got)
 	}
 }
+
+// A Monolith hosts every service in-process and accepts no remote joins, so
+// /rpc/_register is CLOSED (404) — no key needed because there is no door.
+// Hybrid (same config) keeps it open. This pins the Monolith/Hybrid split.
+func TestMonolith_RegisterEndpointIsClosed(t *testing.T) {
+	register := func(gw *gateway.Gateway) int {
+		resp := gw.Handle(context.Background(), &gateway.Request{
+			Method: http.MethodPost,
+			Path:   "/rpc/_register",
+			Header: gateway.Header{},
+			Body:   []byte(`{"name":"Chirp","address":"http://localhost:9002","heartbeat_interval_seconds":5}`),
+		})
+		return resp.Status
+	}
+
+	// Monolith: _register is not exposed → 404, even ungated. No attack
+	// surface to gate.
+	if got := register(NewMonolith(MonolithConfig{})); got != 404 {
+		t.Errorf("monolith _register status=%d, want 404 (endpoint closed)", got)
+	}
+
+	// Hybrid with the SAME config keeps the endpoint live (open here because
+	// ungated) — proving the split is the preset, not the config.
+	if got := register(NewHybrid(HybridConfig{})); got != 200 {
+		t.Errorf("hybrid _register status=%d, want 200 (endpoint open)", got)
+	}
+}
