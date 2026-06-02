@@ -1,6 +1,9 @@
 package gateway
 
-import "io"
+import (
+	"fmt"
+	"io"
+)
 
 // PipeStream adapts a writer-callback into an io.ReadCloser for
 // Response.Stream — the ergonomic form when you have code that writes to an
@@ -17,6 +20,12 @@ import "io"
 // The producer never blocks forever: if the client disconnects, the
 // adapter closes the reader, the next pw.Write fails with
 // io.ErrClosedPipe, and fn returns.
+//
+// A panic inside fn is recovered and surfaced to the reader as an error
+// (the transfer truncates) instead of crashing the process — fn runs in
+// its own goroutine, so the gateway's request-scoped recovery middleware
+// cannot see it. The panic value is not swallowed silently: it becomes
+// the pipe's close error.
 //
 //	return &gateway.Response{
 //	    Status: 200,
@@ -42,8 +51,17 @@ func PipeStream(fn func(w io.Writer) error) io.ReadCloser {
 	pr, pw := io.Pipe()
 	go func() {
 		// CloseWithError(nil) is a clean EOF; a non-nil err is surfaced to
-		// the reader (the adapter's io.Copy returns it).
-		_ = pw.CloseWithError(fn(pw))
+		// the reader (the adapter's io.Copy returns it). A panic in fn is
+		// recovered here — this goroutine is outside the gateway's recovery
+		// middleware, so an unrecovered panic would kill the process.
+		var err error
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("gateway: stream producer panic: %v", r)
+			}
+			_ = pw.CloseWithError(err)
+		}()
+		err = fn(pw)
 	}()
 	return pr
 }

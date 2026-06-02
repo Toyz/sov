@@ -170,8 +170,23 @@ func (s *NetHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
 	// disconnect, which surfaces as an io.Copy error — so a PipeStream
 	// producer goroutine unblocks instead of leaking.
 	if resp.Stream != nil {
+		// Clear the connection write deadline for streams. The server's
+		// WriteTimeout (60s default) is a slowloris guard sized for buffered
+		// responses; left in place it severs any long-lived stream — an MCP
+		// SSE loop or a big export — mid-flight at the deadline. A zero time
+		// disables the deadline for this connection only; buffered responses
+		// keep the timeout. Best-effort: if the writer doesn't support it
+		// (e.g. a test recorder), the stream still works, just under the
+		// server default.
+		rc := http.NewResponseController(w)
+		_ = rc.SetWriteDeadline(time.Time{})
 		w.WriteHeader(resp.Status)
-		_, _ = io.Copy(w, resp.Stream)
+		// Flush after each chunk so events reach the client as produced —
+		// without this, small SSE frames stall in net/http's output buffer
+		// until it fills or the stream ends, defeating real-time delivery.
+		// io.Pipe is synchronous, so each producer Write becomes one Copy
+		// chunk → one flush. Flush is best-effort (no-op if unsupported).
+		_, _ = io.Copy(&flushWriter{w: w, rc: rc}, resp.Stream)
 		if c, ok := resp.Stream.(io.Closer); ok {
 			_ = c.Close()
 		}
@@ -183,6 +198,24 @@ func (s *NetHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.Status)
 	_, _ = w.Write(resp.Body)
+}
+
+// flushWriter flushes the underlying ResponseWriter after every write so a
+// stream's chunks reach the client immediately rather than waiting in
+// net/http's output buffer. Flush errors are ignored: a flush failure means
+// the client is gone, which the next Write surfaces as io.Copy's error.
+type flushWriter struct {
+	w  io.Writer
+	rc *http.ResponseController
+}
+
+func (fw *flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if err != nil {
+		return n, err
+	}
+	_ = fw.rc.Flush()
+	return n, nil
 }
 
 // isIdentityHeader returns true for the X-Sov-* headers that carry

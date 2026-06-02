@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -79,6 +80,74 @@ func TestPipeStream_ErrorPropagates(t *testing.T) {
 	}
 	if !errors.Is(err, boom) {
 		t.Fatalf("err=%v, want boom", err)
+	}
+}
+
+// A panic in the producer is contained: it does not crash the process
+// (the goroutine is outside the gateway's recovery middleware), it
+// surfaces to the reader as an error, and bytes written before the panic
+// are still delivered.
+func TestPipeStream_PanicContained(t *testing.T) {
+	r := PipeStream(func(w io.Writer) error {
+		_, _ = io.WriteString(w, "partial")
+		panic("producer exploded")
+	})
+	got, err := io.ReadAll(r)
+	if string(got) != "partial" {
+		t.Fatalf("read %q, want partial", got)
+	}
+	if err == nil {
+		t.Fatal("err=nil, want stream-producer-panic error")
+	}
+	if !strings.Contains(err.Error(), "producer exploded") {
+		t.Fatalf("err=%v, want panic value surfaced", err)
+	}
+}
+
+// Streamed bytes are flushed to the client as produced, not buffered until
+// the stream ends — the property MCP SSE depends on. Uses a real server +
+// chunked client read: the first frame must arrive while the producer is
+// still blocked waiting to send the second.
+func TestNetHTTP_StreamFlushesPerFrame(t *testing.T) {
+	gate := make(chan struct{})
+	s := NewNetHTTPServer(NetHTTPOptions{})
+	s.Handle(func(ctx context.Context, req *Request) *Response {
+		return &Response{
+			Status: 200,
+			Header: Header{"Content-Type": "text/event-stream"},
+			Stream: PipeStream(func(w io.Writer) error {
+				if _, err := io.WriteString(w, "data: one\n\n"); err != nil {
+					return err
+				}
+				<-gate // block until the client confirms it got frame one
+				_, err := io.WriteString(w, "data: two\n\n")
+				return err
+			}),
+		}
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(s.serve))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/sse")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	buf := make([]byte, len("data: one\n\n"))
+	if _, err := io.ReadFull(resp.Body, buf); err != nil {
+		t.Fatalf("read frame one: %v", err)
+	}
+	if string(buf) != "data: one\n\n" {
+		t.Fatalf("frame one=%q", buf)
+	}
+	// We received frame one before unblocking frame two → it was flushed,
+	// not buffered behind the rest of the response.
+	close(gate)
+	rest, _ := io.ReadAll(resp.Body)
+	if string(rest) != "data: two\n\n" {
+		t.Fatalf("frame two=%q", rest)
 	}
 }
 
