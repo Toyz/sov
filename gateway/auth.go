@@ -261,23 +261,24 @@ func (g *Gateway) checkAuthz(ctx context.Context, claims *Claims, service, metho
 // on miss, and stamps the Claims on req.User so downstream dispatch
 // and proxy can use them.
 //
-// Calls that should bypass auth entirely:
-//   - The auth service itself (otherwise infinite recursion).
-//   - Framework endpoints OTHER than /rpc/_batch — the gateway owns
-//     those (health, register, introspect, explorer) and decides
-//     internally whether to enforce. /rpc/_batch must resolve the
-//     bearer so per-entry sub-requests inherit the Claims; the batch
-//     handler then re-applies authz per entry inside the fan-out.
+// Bearer resolution runs for ALL paths, including framework /rpc/_*
+// endpoints. Framework handlers (batch, batch-stream, events,
+// introspect, explorer, ...) self-gate: they read req.User and decide
+// internally whether to enforce. Resolving the bearer here means every
+// RouteHandler sees ctx.Claims()/RequireSubject(ctx) without parsing
+// the bearer by hand. Authz *enforcement* still exempts framework
+// paths — see authzMiddleware.
+//
+// The one call that must NOT resolve here is the auth service itself
+// (otherwise verifyToken would recurse); that is guarded by comparing
+// req.Path against the auth binding path below, not by the framework
+// prefix.
 //
 // If no Authorization header is present, the call proceeds with
 // req.User = nil. Authz middleware (if configured) handles
 // "anonymous-needs-401" via {Authenticate:true} decisions; handlers
 // without an authz service in front of them use rpc.RequireSubject(ctx)
 // to gate themselves.
-// pathBatch is the one framework endpoint the auth middleware does NOT
-// bypass — batch entries dispatch through the full chain, so the batch
-// request itself must carry verified claims.
-const pathBatch = "/rpc/_batch"
 
 // isFrameworkPath reports whether p is a reserved /rpc/_* endpoint.
 func isFrameworkPath(p string) bool { return strings.HasPrefix(p, "/rpc/_") }
@@ -289,10 +290,6 @@ func rpcPath(service, method string) string { return "/rpc/" + service + "/" + m
 func (g *Gateway) authMiddleware() Middleware {
 	return func(next Handler) Handler {
 		return func(ctx context.Context, req *Request) *Response {
-			if isFrameworkPath(req.Path) && req.Path != pathBatch {
-				return next(ctx, req)
-			}
-
 			// 1. Upstream-injected claims: if the Server let X-Sov-*
 			//    headers through (TrustUpstreamClaims=true) AND the
 			//    upstream gateway already injected them, lift them onto

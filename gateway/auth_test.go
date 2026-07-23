@@ -270,6 +270,51 @@ func TestAuthz_AnonymousIsEvaluated(t *testing.T) {
 	}
 }
 
+// ---- Framework RouteHandler bearer resolution -----------------------------
+
+// whoRoutePlugin is a RouteHandler owning a framework path (/rpc/_who).
+// It reads req.User exactly like _batch-stream/_events handlers do — with
+// NO per-handler bearer parsing. Before the authn-bypass fix, req.User was
+// always nil here and any subject-gated framework handler 401'd forever.
+type whoRoutePlugin struct{}
+
+func (whoRoutePlugin) PluginName() string        { return "who-route" }
+func (whoRoutePlugin) RoutePatterns() []string   { return []string{"/rpc/_who"} }
+func (whoRoutePlugin) ServeRoute(_ context.Context, req *Request) *Response {
+	c, _ := req.User.(*Claims)
+	if c == nil || c.Subject == "" {
+		return ErrorResponseFromAny(rpc.Unauthorized("no subject"))
+	}
+	return &Response{Status: 200, Body: []byte(`{"data":"` + c.Subject + `"}`)}
+}
+
+// A framework RouteHandler that gates on req.User must see resolved Claims
+// from a valid bearer (200) and stay nil for anonymous (401), without
+// parsing the bearer itself.
+func TestAuth_FrameworkRouteGetsResolvedUser(t *testing.T) {
+	gw := New()
+	gw.RegisterAuth(&AuthRouter{})
+	if err := gw.Use(whoRoutePlugin{}); err != nil {
+		t.Fatalf("Use who-route: %v", err)
+	}
+
+	ok := gw.Handle(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/_who",
+		Header: Header{"Authorization": "Bearer good-alice"},
+	})
+	if ok.Status != 200 || !strings.Contains(string(ok.Body), `"u_alice"`) {
+		t.Fatalf("with bearer: status = %d, body = %s", ok.Status, ok.Body)
+	}
+
+	anon := gw.Handle(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/_who",
+		Header: Header{},
+	})
+	if anon.Status != 401 {
+		t.Fatalf("anonymous: status = %d, body = %s", anon.Status, anon.Body)
+	}
+}
+
 // ---- _register-driven auth binding ---------------------------------------
 
 func TestAuth_RegisterFlagBindsRemoteAuth(t *testing.T) {
