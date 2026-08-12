@@ -96,6 +96,39 @@ func TestDescribe_HideTagSentinel(t *testing.T) {
 	}
 }
 
+// TypoHideRouter names a method in HiddenMethods that does not exist —
+// the engine must panic at Register (fail loud) rather than silently
+// leaving nothing hidden.
+type TypoHideRouter struct{}
+
+func (r *TypoHideRouter) Real(ctx *Context) error { return nil }
+func (r *TypoHideRouter) HiddenMethods() []string { return []string{"nonexistent"} }
+
+func TestRegister_PanicsOnUnknownHiddenMarker(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic: HiddenMethods names an unknown method")
+		}
+	}()
+	NewEngine().Register(&TypoHideRouter{})
+}
+
+// GoCasedMarkerRouter returns the Go method name from HiddenMethods; the
+// engine must normalize it to the wire name so the hide takes effect.
+type GoCasedMarkerRouter struct{}
+
+func (r *GoCasedMarkerRouter) Open(ctx *Context) error   { return nil }
+func (r *GoCasedMarkerRouter) Secret(ctx *Context) error { return nil }
+func (r *GoCasedMarkerRouter) HiddenMethods() []string   { return []string{"Secret"} } // Go-cased
+
+func TestRegister_NormalizesGoCasedHiddenMarker(t *testing.T) {
+	e := NewEngine()
+	e.Register(&GoCasedMarkerRouter{})
+	if md := descOf(t, e, "GoCasedMarker", "secret"); !md.Internal {
+		t.Fatalf("Go-cased HiddenMethods([\"Secret\"]) did not mark wire method 'secret' internal")
+	}
+}
+
 func TestBuildFieldMap_BadSentinel(t *testing.T) {
 	type badParams struct {
 		_ struct{} `sov:"internal,bogus"`
