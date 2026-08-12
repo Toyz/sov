@@ -162,10 +162,17 @@ func (h *Plugin) runOne(ctx context.Context, parent *gateway.Request, call gatew
 		Args json.RawMessage `json:"args"`
 	}{Args: bodyArgs})
 
+	hdr := parent.Header.Clone()
+	// Entries are JSON: their args come from the JSON {calls} envelope and
+	// runOne re-marshals them as JSON. Pin the entry to the JSON codec so a
+	// binary codec negotiated on the OUTER request can't be inherited here
+	// and mis-decode the JSON entry body (HELL-286). batchstream is a JSON
+	// multiplexer regardless of the outer request's codec.
+	hdr.Set("Content-Type", "application/json")
 	sub := &gateway.Request{
 		Method:   http.MethodPost,
 		Path:     "/rpc/" + call.Service + "/" + call.Method,
-		Header:   parent.Header.Clone(),
+		Header:   hdr,
 		Body:     wrapped,
 		RemoteIP: parent.RemoteIP,
 		User:     parent.User,

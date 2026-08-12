@@ -168,8 +168,10 @@ func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req 
 	// registered business codec. Absent/unknown/json all resolve to the
 	// JSON default, so internal sub-dispatches (auth verify, authz check,
 	// batch entries) — which carry no codec Content-Type — stay JSON.
+	var selected rpc.Codec
 	if name := codecNameFromContentType(req.Header.Get("Content-Type")); name != "" {
-		rc.SelectCodec(g.engine.ResolveCodec(name))
+		selected = g.engine.ResolveCodec(name)
+		rc.SelectCodec(selected)
 	}
 	// If the auth middleware resolved Claims, stash them on the context
 	// in TWO places: rc.User as the canonical "who is the caller" value
@@ -197,7 +199,23 @@ func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req 
 	// to HeaderInjector for the local path.
 	g.callContextContributors(rc, req)
 	status, body := g.engine.Dispatch(rc, router, method, req.Body)
-	return &Response{Status: status, Body: body, Mode: ModeLocal}
+	resp := &Response{Status: status, Body: body, Mode: ModeLocal}
+	// Reflect the negotiated codec on the response so the caller decodes the
+	// body with the same codec it used (HELL-286). Skip json — the adapter
+	// already defaults application/json — and skip when the requested codec
+	// fell back to the default, so Content-Type never lies about the body.
+	if selected != nil && selected.Name() != "json" {
+		resp.Header = Header{"Content-Type": "application/x-" + selected.Name()}
+	}
+	return resp
+}
+
+// CodecFor returns the business codec negotiated for req by its Content-Type,
+// or the JSON default when none/unknown. Exposed (HELL-286) so a codec-aware
+// plugin can encode per-entry values with the same codec the caller used,
+// instead of hardcoding JSON.
+func (g *Gateway) CodecFor(req *Request) rpc.Codec {
+	return g.engine.ResolveCodec(codecNameFromContentType(req.Header.Get("Content-Type")))
 }
 
 func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method string, req *Request) *Response {

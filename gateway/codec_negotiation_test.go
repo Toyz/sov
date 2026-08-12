@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	. "github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/builtin/batch"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -22,6 +23,60 @@ func (testCodec) EncodeResult(d any) ([]byte, error) {
 	return append([]byte("TEST:"), b...), nil
 }
 func (testCodec) EncodeError(e *rpc.Error) ([]byte, error) { return []byte("TEST-ERR:" + e.Code), nil }
+
+// bnEchoRouter is a param router so a batch test can prove entries decode as
+// JSON (not the outer binary codec's no-op decode).
+type bnEchoRouter struct{}
+
+type bnEchoParams struct {
+	Msg string `json:"msg"`
+}
+
+func (bnEchoRouter) Say(ctx *rpc.Context, p *bnEchoParams) (string, error) { return p.Msg, nil }
+
+// The negotiated codec is reflected on the response Content-Type so the
+// caller decodes the body with the codec it sent.
+func TestCodec_ResponseContentTypeReflectsCodec(t *testing.T) {
+	gw := New()
+	gw.RegisterAuth(&AuthRouter{})
+	gw.Register(&WhoRouter{})
+	gw.Engine().RegisterCodec(testCodec{})
+
+	resp := gw.Handle(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/Who/me",
+		Header: Header{"Authorization": "Bearer good-x", "Content-Type": "application/x-test"},
+	})
+	if got := resp.Header.Get("Content-Type"); got != "application/x-test" {
+		t.Fatalf("response Content-Type = %q, want application/x-test", got)
+	}
+}
+
+// A batch under a binary OUTER codec must still dispatch entries as JSON —
+// batch is a JSON multiplexer. If entries inherited the outer codec, the
+// no-op test decode would drop the param and Say would echo "" instead of
+// the sent value.
+func TestCodec_BatchEntriesPinnedToJSON(t *testing.T) {
+	gw := New()
+	gw.RegisterAuth(&AuthRouter{})
+	gw.Register(&bnEchoRouter{})
+	gw.Engine().RegisterCodec(testCodec{})
+	if err := gw.Use(batch.New(batch.Config{})); err != nil {
+		t.Fatalf("Use batch: %v", err)
+	}
+
+	resp := gw.Handle(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/_batch",
+		Header: Header{"Authorization": "Bearer good-x", "Content-Type": "application/x-test"},
+		Body:   []byte(`{"calls":{"a":{"service":"bnEcho","method":"say","args":{"msg":"hi"}}}}`),
+	})
+	if resp.Status != 200 {
+		t.Fatalf("status = %d, body = %s", resp.Status, resp.Body)
+	}
+	// Batch response framing is JSON; the entry decoded its param as JSON.
+	if !strings.Contains(string(resp.Body), `"hi"`) {
+		t.Fatalf("batch entry not JSON-decoded (param dropped?): %s", resp.Body)
+	}
+}
 
 // A registered codec is selected PER REQUEST by Content-Type; absent it, the
 // JSON default is used.
