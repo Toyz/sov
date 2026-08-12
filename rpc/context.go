@@ -23,9 +23,10 @@ type Context struct {
 	State map[string]any
 }
 
-// NewContext returns a Context wrapping ctx.
+// NewContext returns a Context wrapping ctx. State is created lazily on the
+// first Set — a request that never stashes anything pays no map allocation.
 func NewContext(ctx context.Context) *Context {
-	return &Context{Context: ctx, State: map[string]any{}}
+	return &Context{Context: ctx}
 }
 
 // Set stashes a value in State under key, creating the map if needed.
