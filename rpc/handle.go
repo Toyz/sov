@@ -1,8 +1,6 @@
 package rpc
 
 import (
-	"encoding/json"
-	"errors"
 	"reflect"
 )
 
@@ -42,17 +40,22 @@ func Handle[P any, R any](e *Engine, router, method string, fn func(ctx *Context
 		entry.fieldMap = fm
 	}
 	entry.invoke = func(ctx *Context, body []byte) (int, []byte) {
+		codec := e.activeCodec()
 		var p P
-		if hasParams && len(body) > 0 {
-			if perr := decodeTypedParams(reflect.ValueOf(&p).Elem(), fm, body); perr != nil {
-				return writeErr(perr)
+		if hasParams {
+			if derr := codec.DecodeParams(body, &p, fm); derr != nil {
+				return e.encodeError(asRPCError(derr, BadRequest("%v", derr)))
 			}
 		}
 		r, err := fn(ctx, &p)
 		if err != nil {
-			return typedErr(err)
+			return e.encodeError(asRPCError(err, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
 		}
-		return 200, MarshalSuccess(r)
+		out, mErr := codec.EncodeResult(r)
+		if mErr != nil {
+			return e.encodeError(Internal("encode result: %v", mErr))
+		}
+		return 200, out
 	}
 	e.registerTyped(router, method, entry)
 }
@@ -72,16 +75,21 @@ func HandleErr[P any](e *Engine, router, method string, fn func(ctx *Context, p 
 		entry.fieldMap = fm
 	}
 	entry.invoke = func(ctx *Context, body []byte) (int, []byte) {
+		codec := e.activeCodec()
 		var p P
-		if hasParams && len(body) > 0 {
-			if perr := decodeTypedParams(reflect.ValueOf(&p).Elem(), fm, body); perr != nil {
-				return writeErr(perr)
+		if hasParams {
+			if derr := codec.DecodeParams(body, &p, fm); derr != nil {
+				return e.encodeError(asRPCError(derr, BadRequest("%v", derr)))
 			}
 		}
 		if err := fn(ctx, &p); err != nil {
-			return typedErr(err)
+			return e.encodeError(asRPCError(err, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
 		}
-		return 200, MarshalSuccess(nil)
+		out, mErr := codec.EncodeResult(nil)
+		if mErr != nil {
+			return e.encodeError(Internal("encode result: %v", mErr))
+		}
+		return 200, out
 	}
 	e.registerTyped(router, method, entry)
 }
@@ -97,24 +105,6 @@ func typedParamMap(pt reflect.Type, router, method string) (*FieldMap, bool) {
 		panic("rpc.Handle: " + router + "." + method + " params " + pt.String() + ": " + err.Error())
 	}
 	return fm, true
-}
-
-// decodeTypedParams unwraps the {"args":...} envelope and binds into dst
-// via the boot-built field map (same dual-shape semantics as Register).
-func decodeTypedParams(dst reflect.Value, fm *FieldMap, body []byte) *Error {
-	var req Request
-	if err := json.Unmarshal(body, &req); err != nil {
-		return BadRequest("invalid request body: %v", err)
-	}
-	return bindParams(dst, fm, req.Args)
-}
-
-func typedErr(err error) (int, []byte) {
-	var rpcErr *Error
-	if errors.As(err, &rpcErr) {
-		return rpcErr.Status, MarshalError(rpcErr)
-	}
-	return 500, MarshalError(&Error{Status: 500, Code: "INTERNAL", Message: "internal server error"})
 }
 
 // registerTyped installs a typed entry under router/method, creating the
