@@ -18,6 +18,25 @@ gw.Use(rpc.New())   // serve /rpc/{router}/{method}
   node** and returns the response. The surface itself knows nothing about
   local-vs-remote; that is the fabric's job.
 
+## Marking routers — `rpc.Served`
+
+A router opts into the RPC surface by embedding `rpc.Served`, the counterpart of
+`mcp.Tool`:
+
+```go
+type NotesRouter struct{ rpc.Served }
+func (NotesRouter) Get(ctx *rpc.Context, p *GetParams) (*Note, error) { ... }
+```
+
+The marker is **optional today**: `rpc.New()` serves every registered router,
+marked or not. `rpc.New(rpc.Config{RequireMarker: true})` serves **only** marked
+routers — a local router without `rpc.Served` 404s (remote routers are always
+proxied; their home node enforces its own marker). The unmarked flow is
+deprecated in favor of the marker; embed `rpc.Served` on new routers.
+
+Like `mcp.Tool`, the marker method is unexported — the engine never reflects it
+as a handler, and nothing outside this package can forge the capability.
+
 ## You register it — no magic
 
 There is no core default and no import side-effect: a gateway serves `/rpc` iff

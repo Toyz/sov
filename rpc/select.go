@@ -42,6 +42,21 @@ func (e *Engine) Select(pred func(RouterInfo) bool) []RouterInfo {
 	return out
 }
 
+// RouterValue returns the live instance registered under a router's wire name,
+// or ok=false when no router by that name is registered. O(1) lookup — the
+// single-router counterpart to Select/Find, used when a caller already knows the
+// name and wants to type-assert the instance to a marker interface (e.g. a
+// surface checking whether a router opts into it).
+func (e *Engine) RouterValue(name string) (any, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	rv, ok := e.receiverLocked(name)
+	if !ok {
+		return nil, false
+	}
+	return rv.Interface(), true
+}
+
 // routerInfoLocked builds the RouterInfo for a registered router name. Caller
 // holds e.mu (read). ok=false when the name is unregistered or carries no
 // methods to recover an instance from.

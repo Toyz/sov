@@ -21,6 +21,80 @@ Three ideas, in order:
 
 ---
 
+## Quickstart — one router, both surfaces
+
+A complete server. One router struct, served over `/rpc` **and** MCP, because you
+register both surface builtins and the router opts into each with a marker.
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Toyz/sov"
+	"github.com/Toyz/sov/gateway/builtin/mcp"
+	"github.com/Toyz/sov/gateway/builtin/rpc"
+)
+
+// A router. Embed the surface markers it should appear on:
+//   rpc.Served -> served over /rpc/{router}/{method}
+//   mcp.Tool   -> exposed as an MCP tool
+type NotesRouter struct {
+	rpc.Served
+	mcp.Tool
+}
+
+type GetParams struct {
+	ID string `json:"id"`
+}
+
+func (NotesRouter) Get(_ *sov.Context, p *GetParams) (map[string]string, error) {
+	return map[string]string{"id": p.ID, "body": "note " + p.ID}, nil
+}
+
+func main() {
+	gw := sov.New()
+	gw.MustUse(rpc.New())             // the /rpc surface (a builtin)
+	gw.MustUse(mcp.New(mcp.Config{})) // the MCP surface (a builtin)
+	gw.Register(&NotesRouter{})       // one struct, both surfaces
+	log.Fatal(gw.ListenAndServe(context.Background(), ":8080"))
+}
+```
+
+Hit both surfaces:
+
+```sh
+# RPC
+curl -s localhost:8080/rpc/Notes/get -d '{"args":[{"id":"1"}]}'
+#   -> {"data":{"id":"1","body":"note 1"}}
+
+# MCP: list tools, then call one
+curl -s localhost:8080/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+#   -> ... "name":"Notes.get" ...
+curl -s localhost:8080/mcp -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"Notes.get","arguments":{"id":"1"}}}'
+#   -> ... "text":"{\"data\":{\"id\":\"1\",\"body\":\"note 1\"}}" ...
+```
+
+That's the whole model: **a surface is a builtin you `Use`; a router opts into a
+surface with a marker.** Notes on each:
+
+- **`rpc.Served` is optional today** — `rpc.New()` serves every registered router,
+  marker or not. It becomes required under `rpc.New(rpc.Config{RequireMarker: true})`,
+  and the unmarked flow is deprecated in favor of the marker. `mcp.Tool` is always
+  required (MCP is selective).
+- **Presets do the wiring for you** — `sov.NewMonolith(...)`, `NewPod`, `NewRegistry`,
+  `NewHybrid` already register `rpc` (plus registry, batch, cors, request-id). Reach
+  for `sov.New()` + explicit `Use` only when you want to pick surfaces yourself.
+- **An MCP-only node** is just this program without `gw.MustUse(rpc.New())` — no
+  `/rpc`, tools still served.
+- **Meshing is free** — see the runnable two-node example
+  [`examples/chirp/cmd/mcpmesh`](../examples/chirp/cmd/mcpmesh/): the same routers,
+  RPC + MCP, with the tool service on one node and the edge on another.
+
+---
+
 ## 1. The fabric: `g.Dispatch`
 
 ```go

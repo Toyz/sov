@@ -12,7 +12,8 @@ import (
 	"github.com/Toyz/sov/gateway/builtin/rpc"
 )
 
-type EchoRouter struct{}
+// EchoRouter embeds rpc.Served — the marker that exposes it over /rpc.
+type EchoRouter struct{ rpc.Served }
 type SayParams struct {
 	Msg string `json:"msg"`
 }
