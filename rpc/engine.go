@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 )
 
@@ -39,6 +40,12 @@ type Engine struct {
 	// Read on the dispatch hot path; mutated only at boot.
 	codecs       map[string]Codec
 	defaultCodec Codec
+	// negotiable is true once more than one codec is registered — the only
+	// case where per-request Content-Type negotiation can change the codec.
+	// The transport adapter checks it to skip negotiation entirely in the
+	// common single-codec (JSON-only) deployment. An atomic so the dispatch
+	// hot path reads it without a lock.
+	negotiable atomic.Bool
 	// logger sinks non-fatal boot warnings; nil falls back to slog.Default().
 	logger Logger
 }
@@ -90,8 +97,17 @@ func (e *Engine) RegisterCodec(c Codec) {
 	}
 	e.mu.Lock()
 	e.codecs[c.Name()] = c
+	if len(e.codecs) > 1 {
+		e.negotiable.Store(true)
+	}
 	e.mu.Unlock()
 }
+
+// Negotiable reports whether more than one codec is registered — i.e.
+// whether per-request Content-Type negotiation can actually change the
+// codec. False in the common JSON-only deployment, letting the transport
+// adapter skip the Content-Type parse on the hot path.
+func (e *Engine) Negotiable() bool { return e.negotiable.Load() }
 
 // SetCodec sets the DEFAULT codec (and registers it). Back-compat with the
 // single-codec API — a request that selects no codec uses this one. Passing
@@ -103,6 +119,9 @@ func (e *Engine) SetCodec(c Codec) {
 	e.mu.Lock()
 	e.codecs[c.Name()] = c
 	e.defaultCodec = c
+	if len(e.codecs) > 1 {
+		e.negotiable.Store(true)
+	}
 	e.mu.Unlock()
 }
 
