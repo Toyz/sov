@@ -42,40 +42,6 @@ func (e *Engine) Select(pred func(RouterInfo) bool) []RouterInfo {
 	return out
 }
 
-// Bound pairs a registered router's wire name with the instance viewed as T —
-// the result element of SelectAs.
-type Bound[T any] struct {
-	Name   string // wire name — the /rpc/{router} dispatch segment
-	Router T      // the registered instance, asserted to T
-}
-
-// SelectAs returns every registered router that implements interface T, each as
-// T alongside its wire name, in registration order. This is the by-capability
-// query — filter the registry by an interface type rather than by name:
-//
-//	for _, b := range rpc.SelectAs[mcp.ToolRouter](engine) {
-//		// b.Name is the wire name; b.Router is the router as mcp.ToolRouter
-//	}
-//
-// T is normally an interface; a concrete T matches only routers of exactly that
-// dynamic type. It is a free function, not a method, because Go methods cannot
-// take type parameters. Read-only snapshot — safe under concurrent dispatch.
-func SelectAs[T any](e *Engine) []Bound[T] {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	var out []Bound[T]
-	for _, name := range e.routerOrder {
-		inst, ok := e.routerInstanceLocked(name)
-		if !ok {
-			continue
-		}
-		if t, ok := inst.(T); ok {
-			out = append(out, Bound[T]{Name: name, Router: t})
-		}
-	}
-	return out
-}
-
 // routerInfoLocked builds the RouterInfo for a registered router name. Caller
 // holds e.mu (read). ok=false when the name is unregistered or carries no
 // methods to recover an instance from.
@@ -89,16 +55,6 @@ func (e *Engine) routerInfoLocked(name string) (RouterInfo, bool) {
 		rt = rt.Elem()
 	}
 	return RouterInfo{Name: name, TypeName: rt.Name(), Value: rv.Interface()}, true
-}
-
-// routerInstanceLocked returns the live router instance for name. Caller holds
-// e.mu (read).
-func (e *Engine) routerInstanceLocked(name string) (any, bool) {
-	rv, ok := e.receiverLocked(name)
-	if !ok {
-		return nil, false
-	}
-	return rv.Interface(), true
 }
 
 // receiverLocked recovers the registered receiver value for a router. Every

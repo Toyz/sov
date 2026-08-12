@@ -282,6 +282,17 @@ func (g *Gateway) checkAuthz(ctx context.Context, claims *Claims, service, metho
 	return rpc.Forbidden("%s", reason)
 }
 
+// Authorize runs the bound AuthzService against (claims, router, method) with
+// the method's DECLARED perm (engine.Perm) and the caller's headers — the same
+// gate authzMiddleware applies on /rpc. Returns nil when allowed, or when no
+// authz service is bound. A surface that dispatches a method OUTSIDE the /rpc
+// middleware chain — MCP tools routing through Dispatch — calls this so authz
+// applies exactly as it would over /rpc.
+func (g *Gateway) Authorize(ctx context.Context, claims *Claims, router, method string, headers Header) error {
+	perm := g.engine.Perm(router, method)
+	return g.checkAuthz(ctx, claims, router, method, perm, headers)
+}
+
 // authMiddleware runs first in the middleware chain. It strips the
 // inbound bearer, looks up the cached Claims, calls AuthService.verify
 // on miss, and stamps the Claims on req.User so downstream dispatch

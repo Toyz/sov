@@ -42,28 +42,31 @@ The marker method on `mcp.Tool` is **unexported**, which does two jobs:
    is to embed `mcp.Tool`, so "is this a tool router" is a real type check, not
    a string suffix.
 
-## Discovery — the registry filter
+## Discovery — the registry filter engine
 
-The plugin finds tool routers through the engine's capability filter, not a
-hard-wired list:
+The plugin finds tool routers through the engine's composable filter DSL, not a
+hard-wired list or a name convention:
 
 ```go
-for _, b := range rpc.SelectAs[mcp.ToolRouter](engine) {
-    // b.Name is the wire name; b.Router is the router as mcp.ToolRouter
+for _, ri := range engine.Find(rpc.Implements[mcp.ToolRouter]()) {
+    // ri.Name is the wire name; ri.Value is the live instance
 }
 ```
 
-`rpc.SelectAs[T]` (and the general `engine.Select(pred)`) query the registry by
-interface or predicate. MCP is just the first consumer — any plugin can `Select`
-the routers it cares about and wire them to its own hooks.
+The filter DSL — `Find` with `Implements[T]()`, `ByName`, `ByTypeName`, and the
+`And`/`Or`/`Not` combinators (plus the raw `Select(pred)` escape hatch) — lets
+any surface builtin query the registry by capability, name, or type. MCP is just
+the first consumer.
 
-## Auth / authz
+## Auth / authz / mesh
 
-`tools/call` re-dispatches through `gw.Handle`, so auth, authz, and the
-declarative perm (HELL-280) gate an MCP call **exactly** as they gate the same
-method over `/rpc`. There is no separate MCP capability model — MCP rides the
-perm system. The MCP client's bearer is the caller's identity; the declared
-perm also rides into each tool's description so the model knows it's needed.
+`tools/call` routes through the gateway's **mesh fabric** — `Authorize` (the same
+authz + declarative perm, HELL-280) then `Dispatch`. Because `Dispatch` resolves
+the service local **or** remote, a tool whose service is federated to another
+node just routes there with no MCP-specific code — the MCP surface meshes for
+free. There is no separate MCP capability model — MCP rides the mesh. The MCP
+client's bearer is the caller's identity; the declared perm also rides into each
+tool's description so the model knows it's needed.
 
 ## Follow-ups
 

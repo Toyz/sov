@@ -5,13 +5,14 @@
 //
 // A router opts into the MCP surface by embedding mcp.Tool (see tools.go). The
 // plugin discovers those routers through the engine's capability filter
-// (rpc.SelectAs[ToolRouter]) — no name convention, no registration list. Each
-// method of a tool router becomes a tool: name, JSON Schema, description, and
-// declared perm are all REFLECTED from the same engine metadata that drives
-// /rpc. tools/call re-dispatches through gw.Handle, so the full request chain —
-// auth, authz, and the declarative perm (HELL-280) — gates an MCP call exactly
-// as it gates the same method over /rpc. There is no separate MCP capability
-// model: MCP rides the perm system.
+// (eng.Find(rpc.Implements[ToolRouter]())) — no name convention, no
+// registration list. Each method of a tool router becomes a tool: name, JSON
+// Schema, description, and declared perm are all REFLECTED from the same engine
+// metadata that drives /rpc. tools/call routes through the gateway's mesh fabric
+// (Authorize + Dispatch), so the full request chain — auth, authz, and the
+// declarative perm (HELL-280) — gates an MCP call exactly as it gates the same
+// method over /rpc, AND a tool whose service is federated to another node just
+// routes there. There is no separate MCP capability model: MCP rides the mesh.
 //
 // Transport is Streamable-HTTP (JSON-RPC 2.0 over POST, single-JSON reply);
 // SSE tools, resources, and prompts are follow-ups.

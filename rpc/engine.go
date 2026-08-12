@@ -396,10 +396,12 @@ func (e *Engine) Register(router any) {
 	if typeName == "" {
 		panic("rpc.Engine.Register: router type must be named (no anonymous structs)")
 	}
+	// Wire name = the type name with a trailing "Router" stripped when present
+	// (NoteToolsRouter -> NoteTools); otherwise the type name verbatim
+	// (Notes -> Notes). "Router" is a convention for a clean wire name, no
+	// longer a hard requirement — a struct registers under whatever it is named,
+	// and surfaces discover it by capability (see Engine.Find), not by name.
 	routerName := strings.TrimSuffix(typeName, "Router")
-	if routerName == typeName {
-		panic(fmt.Sprintf("rpc.Engine.Register: router struct %q must end in 'Router'", typeName))
-	}
 
 	methods := map[string]*methodEntry{}
 	for i := 0; i < rt.NumMethod(); i++ {

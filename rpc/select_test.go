@@ -22,27 +22,6 @@ type BetaRouter struct{}
 
 func (BetaRouter) Ping(ctx *rpc.Context) (string, error) { return "b", nil }
 
-// SelectAs filters the registry by CAPABILITY: only the router that embeds the
-// marker matches, and it comes back typed as the interface + wired to its
-// instance. The unexported marker method is invisible to Register (reflect
-// lists only exported methods), so AlphaRouter still registers its Ping.
-func TestSelectAs_ByInterface(t *testing.T) {
-	e := rpc.NewEngine()
-	e.Register(&AlphaRouter{})
-	e.Register(&BetaRouter{})
-
-	got := rpc.SelectAs[marker](e)
-	if len(got) != 1 {
-		t.Fatalf("SelectAs matched %d routers, want 1: %+v", len(got), got)
-	}
-	if got[0].Name != "Alpha" {
-		t.Fatalf("matched name = %q, want Alpha", got[0].Name)
-	}
-	if _, ok := any(got[0].Router).(*AlphaRouter); !ok {
-		t.Fatalf("Router is not the live *AlphaRouter: %T", got[0].Router)
-	}
-}
-
 // Select is the general seam: match by Go type name OR by a marker-interface
 // assertion on the live Value.
 func TestSelect_ByPredicate(t *testing.T) {
@@ -58,6 +37,23 @@ func TestSelect_ByPredicate(t *testing.T) {
 	byIface := e.Select(func(ri rpc.RouterInfo) bool { _, ok := ri.Value.(marker); return ok })
 	if len(byIface) != 1 || byIface[0].Name != "Alpha" {
 		t.Fatalf("select by marker = %+v, want [Alpha]", byIface)
+	}
+}
+
+// Notes has no "Router" suffix — it must still register (the suffix is a
+// convention for a clean wire name, not a hard requirement) under its full type
+// name.
+type Notes struct{}
+
+func (Notes) Get(ctx *rpc.Context) (string, error) { return "n", nil }
+
+func TestRegister_NoRouterSuffixAllowed(t *testing.T) {
+	e := rpc.NewEngine()
+	e.Register(&Notes{}) // must not panic
+
+	got := e.Find(rpc.ByTypeName(func(tn string) bool { return tn == "Notes" }))
+	if len(got) != 1 || got[0].Name != "Notes" {
+		t.Fatalf("Notes not registered under its full name: %+v", got)
 	}
 }
 

@@ -16,18 +16,18 @@ import (
 //	func (NoteToolsRouter) Read(ctx *rpc.Context, p *ReadParams) (*Note, error) { ... }
 //
 // Embedding it — and only embedding it — makes the router satisfy ToolRouter,
-// so the MCP built-in discovers it via rpc.SelectAs. The marker method is
-// UNEXPORTED, which does two jobs at once: the rpc engine never sees it
-// (reflect lists only exported methods, so Register does not try to make it an
-// RPC handler), and no code outside this package can forge ToolRouter — the
-// only way to satisfy it is to embed Tool. The router keeps its normal *Router
-// name and so serves /rpc AND MCP from the same struct — PEMM.
+// so the MCP built-in discovers it through the registry filter
+// (eng.Find(rpc.Implements[ToolRouter]())). The marker method is UNEXPORTED,
+// which does two jobs at once: the rpc engine never sees it (reflect lists only
+// exported methods, so Register does not try to make it an RPC handler), and no
+// code outside this package can forge ToolRouter — the only way to satisfy it
+// is to embed Tool. The router serves /rpc AND MCP from the same struct — PEMM.
 type Tool struct{}
 
 func (Tool) sovMCPTool() {}
 
 // ToolRouter is the capability the MCP built-in filters the registry for
-// (rpc.SelectAs[ToolRouter]). Satisfied only by embedding Tool.
+// (rpc.Implements[ToolRouter]()). Satisfied only by embedding Tool.
 type ToolRouter interface{ sovMCPTool() }
 
 // toolEntry is one resolved MCP tool: its wire identity plus the router/method
@@ -42,15 +42,15 @@ type toolEntry struct {
 }
 
 // toolEntries resolves every tool-router method into an MCP tool. Discovery is
-// by CAPABILITY: rpc.SelectAs[ToolRouter] returns the routers that embed
-// mcp.Tool; their methods (minus hidden ones) become tools, with name, schema,
-// perm, and description reflected from the same engine metadata as /rpc. This
-// is the single source of truth for both listing and calling.
+// by CAPABILITY: eng.Find(rpc.Implements[ToolRouter]()) returns the routers that
+// embed mcp.Tool; their methods (minus hidden ones) become tools, with name,
+// schema, perm, and description reflected from the same engine metadata as /rpc.
+// This is the single source of truth for both listing and calling.
 func (p *Plugin) toolEntries() []toolEntry {
 	eng := p.gw.Engine()
 	want := map[string]bool{}
-	for _, b := range rpc.SelectAs[ToolRouter](eng) {
-		want[b.Name] = true
+	for _, ri := range eng.Find(rpc.Implements[ToolRouter]()) {
+		want[ri.Name] = true
 	}
 	if len(want) == 0 {
 		return nil
@@ -155,10 +155,13 @@ type toolCallParams struct {
 	Arguments json.RawMessage `json:"arguments"`
 }
 
-// callTool resolves the tool name to its router/method and dispatches through
-// gw.Handle — so auth, authz, and the declarative perm gate the call exactly as
-// they do over /rpc. The MCP request's bearer rides along, so the caller's
-// identity is the LLM's identity.
+// callTool resolves the tool name to its router/method and routes the call
+// through the gateway's MESH FABRIC: Authorize (same authz + declarative perm as
+// /rpc) then Dispatch, which resolves the service local OR remote. Routing
+// through Dispatch — rather than gw.Handle/`/rpc` — is what MESHES the tool: a
+// tool whose service is federated to another node just proxies there, with no
+// MCP-specific mesh code. Identity was already resolved on the /mcp request
+// (mcpReq.User) by the auth middleware; the MCP client's bearer is the caller.
 func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params json.RawMessage) (map[string]any, *jsonRPCError) {
 	var tc toolCallParams
 	if err := json.Unmarshal(params, &tc); err != nil {
@@ -173,6 +176,13 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 	}
 	if router == "" {
 		return nil, &jsonRPCError{code: -32602, msg: "unknown tool: " + tc.Name}
+	}
+
+	// Same authz/perm gate /rpc applies; claims were resolved on the /mcp
+	// request by the auth middleware, so reuse them (no re-verify).
+	claims, _ := mcpReq.User.(*gateway.Claims)
+	if err := p.gw.Authorize(ctx, claims, router, method, mcpReq.Header); err != nil {
+		return toolResult(gateway.ErrorResponseFromAny(err)), nil
 	}
 
 	args := tc.Arguments
@@ -190,9 +200,10 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 		Path:     "/rpc/" + router + "/" + method,
 		Header:   hdr,
 		Body:     body,
+		User:     mcpReq.User, // verified claims flow to the handler / remote hop
 		RemoteIP: mcpReq.RemoteIP,
 	}
-	return toolResult(p.gw.Handle(ctx, sub)), nil
+	return toolResult(p.gw.Dispatch(ctx, sub)), nil
 }
 
 // toolResult wraps an RPC response as an MCP tool result. The raw
