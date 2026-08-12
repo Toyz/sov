@@ -285,12 +285,14 @@ type MethodAuthorizer interface {
 // plugin-shape (hook methods) in one declaration.
 //
 // MAINTENANCE: every entry is a method name on a gateway plugin
-// sub-interface (gateway/plugin.go) or the PublicLister marker. When you
-// add a new plugin hook interface, add its method name(s) here. The
-// reflection sanity test TestReservedMarkers_CoverPluginInterfaces in
-// gateway/plugin_marker_test.go fails the build if the two drift, so a
-// forgotten entry surfaces in CI rather than as a mysterious boot-time
-// dispatch error. Kept sorted alphabetically.
+// sub-interface (gateway/plugin.go), an rpc router marker (PublicLister /
+// HiddenLister / HardHiddenLister / AuthzRequirer / MethodAuthorizer), or a
+// higher-layer router marker a builtin reflects (e.g. the MCP builtin's
+// MCPTools). When you add a new plugin hook interface OR router marker
+// method, add its name here so Register skips it instead of panicking on a
+// non-RPC signature. The reflection sanity test
+// TestReservedMarkers_CoverPluginInterfaces in gateway/plugin_marker_test.go
+// fails the build if the plugin hooks drift. Kept sorted alphabetically.
 var reservedMarkerMethods = map[string]bool{
 	"After":                true,
 	"AggregateHealth":      true,
@@ -312,6 +314,7 @@ var reservedMarkerMethods = map[string]bool{
 	"Introspectables":      true,
 	"ListenAndServe":       true,
 	"Logger":               true,
+	"MCPTools":             true,
 	"OnDispatch":           true,
 	"OnStart":              true,
 	"OnStop":               true,
@@ -705,6 +708,25 @@ func (e *Engine) Routers() []string {
 	out := make([]string, len(e.routerOrder))
 	copy(out, e.routerOrder)
 	return out
+}
+
+// RouterValue returns the registered router instance (the pointer passed to
+// Register), so introspecting callers can type-assert it for optional marker
+// interfaces. Returns false for an unknown router or one registered only via
+// rpc.Handle (typed closures carry no router instance).
+func (e *Engine) RouterValue(router string) (any, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	methods, ok := e.routers[router]
+	if !ok {
+		return nil, false
+	}
+	for _, ent := range methods {
+		if ent.router.IsValid() {
+			return ent.router.Interface(), true
+		}
+	}
+	return nil, false
 }
 
 // Methods returns the wire method names registered on router, in sorted order.

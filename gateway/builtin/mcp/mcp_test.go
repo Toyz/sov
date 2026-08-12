@@ -39,6 +39,22 @@ func (GuardRouter) AuthzRequirements() map[string]string {
 	return map[string]string{"act": "pages:write"}
 }
 
+// ToolsRouter customizes its MCP surface: rename fetch, expose a hard-hidden
+// method as an MCP-only tool, and exclude a dangerous one.
+type ToolsRouter struct{}
+
+func (ToolsRouter) Fetch(ctx *rpc.Context) (string, error)  { return "fetched", nil }
+func (ToolsRouter) Secret(ctx *rpc.Context) (string, error) { return "secret", nil }
+func (ToolsRouter) Danger(ctx *rpc.Context) (string, error) { return "boom", nil }
+func (ToolsRouter) HardHiddenMethods() []string             { return []string{"secret"} }
+func (ToolsRouter) MCPTools() []mcp.MCPTool {
+	return []mcp.MCPTool{
+		{Method: "fetch", Name: "get_thing", Description: "Get a thing for the model"},
+		{Method: "secret", Name: "peek"}, // MCP-only: hard-hidden from /rpc, tool here
+		{Method: "danger", Exclude: true},
+	}
+}
+
 // ---- helpers --------------------------------------------------------------
 
 func mcpPost(t *testing.T, gw *gateway.Gateway, bearer, method string, params any) map[string]any {
@@ -121,6 +137,58 @@ func TestMCP_ToolsListReflectsRouters(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("tools/list did not reflect Who.me: %v", tools)
+	}
+}
+
+func toolNames(out map[string]any) map[string]bool {
+	res, _ := out["result"].(map[string]any)
+	tools, _ := res["tools"].([]any)
+	names := map[string]bool{}
+	for _, tv := range tools {
+		tm, _ := tv.(map[string]any)
+		if n, ok := tm["name"].(string); ok {
+			names[n] = true
+		}
+	}
+	return names
+}
+
+// The MCPToolProvider marker renames, excludes, and exposes an MCP-only tool
+// (hard-hidden from /rpc). tools/call resolves the renamed tool back to its
+// method, and the hard-hidden method never leaks into /rpc introspection.
+func TestMCP_ToolCustomization(t *testing.T) {
+	gw := gateway.New()
+	gw.Register(&ToolsRouter{})
+	gw.MustUse(mcp.New(mcp.Config{}))
+	gw.ExposeIntrospect()
+
+	names := toolNames(mcpPost(t, gw, "", "tools/list", map[string]any{}))
+	if !names["get_thing"] {
+		t.Fatalf("fetch not renamed to get_thing: %v", names)
+	}
+	if names["Tools.fetch"] {
+		t.Fatalf("renamed tool should not also appear under its auto name: %v", names)
+	}
+	if !names["peek"] {
+		t.Fatalf("hard-hidden 'secret' not exposed as MCP-only tool 'peek': %v", names)
+	}
+	if names["Tools.danger"] {
+		t.Fatalf("excluded 'danger' should not be a tool: %v", names)
+	}
+
+	// tools/call resolves the RENAMED tool back to its method.
+	call := mcpPost(t, gw, "", "tools/call", map[string]any{"name": "get_thing", "arguments": map[string]any{}})
+	cres, _ := call["result"].(map[string]any)
+	content, _ := cres["content"].([]any)
+	first, _ := content[0].(map[string]any)
+	if !strings.Contains(first["text"].(string), "fetched") {
+		t.Fatalf("renamed tool did not dispatch to fetch: %v", cres)
+	}
+
+	// The MCP-only tool stays hard-hidden from /rpc introspection.
+	ib := string(gw.IntrospectBody(context.Background(), &gateway.Request{Header: gateway.Header{}}).Body)
+	if strings.Contains(ib, `"secret"`) {
+		t.Fatalf("MCP-only method leaked into /rpc introspect: %s", ib)
 	}
 }
 
