@@ -134,5 +134,7 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 			}
 		}
 	}
-	return p.gw.Dispatch(ctx, req)
+	// We already split req.Path above for the policy checks; hand the parts to
+	// the fabric so it does not re-split.
+	return p.gw.DispatchResolved(ctx, req, router, method)
 }

@@ -242,6 +242,41 @@ pod's `JoinMesh(..., Introspectable: true)`).
 
 ---
 
+## Building a new surface — the marker convention
+
+`mcp.Tool` and `rpc.Served` are the same deliberate pattern. Follow it if you add
+a surface (GraphQL, gRPC-web, a job queue…) so opt-in stays unforgeable and
+discovery + federation stay uniform. Three pieces, in your surface's package:
+
+```go
+// 1. A zero-size marker a router embeds to opt in. The method is UNEXPORTED —
+//    the rpc engine never reflects it as a handler, and no code outside this
+//    package can forge it, so embedding the struct is the ONLY way in.
+type Tool struct{}
+func (Tool) sovMCPTool() {}
+
+// 2. The capability interface it satisfies — discover routers by it:
+type ToolRouter interface{ sovMCPTool() }
+//    eng.Find(rpc.Implements[ToolRouter]())
+
+// 3. Tag membership in the introspect catalog (an IntrospectContributor on your
+//    plugin) so it FEDERATES and shows in the explorer:
+func (p *Plugin) ContributeIntrospect(_ context.Context, r *gateway.IntrospectReport, _ string, _ []string) error {
+    p.gw.TagSurface(r, "mcp", rpc.Implements[ToolRouter]())
+    return nil
+}
+```
+
+The three pieces can't be shared across surfaces — the unexported method must
+belong to each surface's own package, which is exactly what makes it unforgeable
+— but the SHAPE is fixed and the moving parts are shared library code:
+`rpc.Implements[T]`, `Gateway.TagSurface`, `Gateway.FederatedCatalog`, and
+`RouterDescriptor.HasSurface`. To dispatch a call your surface received, lower it
+to a `Request` and hand it to `Dispatch` (or `DispatchResolved` if you've already
+parsed the path); the fabric handles local/peer/remote.
+
+---
+
 ## Worked example
 
 [`examples/chirp/cmd/mcpmesh`](../examples/chirp/cmd/mcpmesh/) — one binary, two

@@ -150,12 +150,20 @@ func codecNameFromContentType(ct string) string {
 // Dispatch does NOT run the auth/authz middleware: a caller that reaches it
 // OUTSIDE the HTTP chain (an MCP tool call, an internal fan-out) owns identity
 // (set req.User) and authorization (call Authorize first). The /rpc HTTP path
-// still runs the full middleware chain before landing here via routeBusiness.
+// still runs the full middleware chain before landing here via the rpc surface.
 func (g *Gateway) Dispatch(ctx context.Context, req *Request) *Response {
 	router, method, ok := rpc.SplitRPCPath(req.Path)
 	if !ok {
 		return ErrorResponse(rpc.NotFound("path must be /rpc/{router}/{method}"))
 	}
+	return g.DispatchResolved(ctx, req, router, method)
+}
+
+// DispatchResolved is Dispatch for a caller that has ALREADY parsed req.Path into
+// router + method — the rpc surface, for one, parses to apply its POST/reserved
+// policy, so it hands the parts straight here instead of re-splitting. router and
+// method must be the split of req.Path. See Dispatch for the routing semantics.
+func (g *Gateway) DispatchResolved(ctx context.Context, req *Request, router, method string) *Response {
 	endpoint, ok := g.resolver.Resolve(ctx, router)
 	if !ok {
 		return ErrorResponse(rpc.NotFound("service %q not registered", router))
