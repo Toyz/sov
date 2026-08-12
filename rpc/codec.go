@@ -41,7 +41,10 @@ type Codec interface {
 // and the {"data":...} / {"error":...} envelopes.
 type jsonCodec struct{}
 
-func (jsonCodec) Name() string { return "json" }
+// jsonName is the registry key and negotiation id of the default codec.
+const jsonName = "json"
+
+func (jsonCodec) Name() string { return jsonName }
 
 func (jsonCodec) DecodeParams(body []byte, params any, fm *FieldMap) error {
 	if len(body) == 0 {

@@ -94,6 +94,31 @@ func errCodeFromBody(body []byte) string {
 	return env.Error.Code
 }
 
+// codecNameFromContentType maps an inbound Content-Type to a codec registry
+// name (HELL-286). "application/json" (or empty) yields "" — the caller then
+// leaves the engine default (JSON). Other "application/[x-]<sub>" types yield
+// "<sub>" (e.g. application/x-msgpack -> "msgpack"); an unregistered name
+// falls back to the default at ResolveCodec time. Parameters (";charset=…")
+// are ignored.
+func codecNameFromContentType(ct string) string {
+	if ct == "" {
+		return ""
+	}
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	ct = strings.TrimSpace(ct)
+	const prefix = "application/"
+	if !strings.HasPrefix(ct, prefix) {
+		return ""
+	}
+	sub := strings.TrimPrefix(ct[len(prefix):], "x-")
+	if sub == "json" {
+		return "" // the default; no per-request selection needed
+	}
+	return sub
+}
+
 // routeBusiness handles non-framework /rpc/{router}/{method} dispatch.
 // Exported-ish (lowercase but used from framework.go) so _batch can fan
 // out through the same path.
@@ -139,6 +164,13 @@ func (g *Gateway) routeBusiness(ctx context.Context, req *Request) *Response {
 
 func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req *Request) *Response {
 	rc := rpc.NewContext(ctx)
+	// Codec negotiation (HELL-286): map the inbound Content-Type to a
+	// registered business codec. Absent/unknown/json all resolve to the
+	// JSON default, so internal sub-dispatches (auth verify, authz check,
+	// batch entries) — which carry no codec Content-Type — stay JSON.
+	if name := codecNameFromContentType(req.Header.Get("Content-Type")); name != "" {
+		rc.SelectCodec(g.engine.ResolveCodec(name))
+	}
 	// If the auth middleware resolved Claims, stash them on the context
 	// in TWO places: rc.User as the canonical "who is the caller" value
 	// (so rpc.UserFromContext works), and rc.State["sov.claims"] as the
