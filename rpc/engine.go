@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"reflect"
@@ -30,9 +31,13 @@ type Engine struct {
 	hardHiddenList map[string][]string         // router → HARD-hidden wire names declared via HardHiddenMethods()
 	authorizers    map[string]MethodAuthorizer // router → in-process resource-scoped authz hook (HELL-283)
 	routerOrder    []string
+	// codec encodes/decodes BUSINESS method params + results (HELL-286).
+	// Defaults to the JSON wire; SetCodec installs another at boot. Read on
+	// the dispatch hot path; set once before serving.
+	codec Codec
 }
 
-// NewEngine returns an empty Engine.
+// NewEngine returns an empty Engine using the default JSON codec.
 func NewEngine() *Engine {
 	return &Engine{
 		routers:        map[string]map[string]*methodEntry{},
@@ -40,7 +45,50 @@ func NewEngine() *Engine {
 		hiddenList:     map[string][]string{},
 		hardHiddenList: map[string][]string{},
 		authorizers:    map[string]MethodAuthorizer{},
+		codec:          jsonCodec{},
 	}
+}
+
+// SetCodec installs the codec used for BUSINESS method params/results
+// (HELL-286). Call at boot, before dispatch — the JSON default is the
+// cross-language PEMM wire, so a non-JSON codec is a per-deployment,
+// homogeneous-only choice. Framework envelopes stay JSON regardless.
+func (e *Engine) SetCodec(c Codec) {
+	if c == nil {
+		c = jsonCodec{}
+	}
+	e.mu.Lock()
+	e.codec = c
+	e.mu.Unlock()
+}
+
+// activeCodec returns the installed codec, or the JSON default if an Engine
+// was constructed without NewEngine (defensive — the zero Engine has none).
+func (e *Engine) activeCodec() Codec {
+	if e.codec == nil {
+		return jsonCodec{}
+	}
+	return e.codec
+}
+
+// encodeError renders rerr through the active codec, falling back to JSON if
+// the codec itself fails to encode (so an error is never swallowed).
+func (e *Engine) encodeError(rerr *Error) (int, []byte) {
+	body, err := e.activeCodec().EncodeError(rerr)
+	if err != nil {
+		return rerr.Status, MarshalError(rerr)
+	}
+	return rerr.Status, body
+}
+
+// asRPCError extracts an *Error from err, or returns fallback when err is
+// not (and does not wrap) one.
+func asRPCError(err error, fallback *Error) *Error {
+	var r *Error
+	if errors.As(err, &r) {
+		return r
+	}
+	return fallback
 }
 
 // PublicLister is the optional marker a router implements to publish a
