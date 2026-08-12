@@ -56,11 +56,16 @@ type Plugin struct {
 }
 
 var (
-	_ gateway.Plugin        = (*Plugin)(nil)
-	_ gateway.PluginDoc     = (*Plugin)(nil)
-	_ gateway.ConfigApplier = (*Plugin)(nil)
-	_ gateway.RouteHandler  = (*Plugin)(nil)
+	_ gateway.Plugin                = (*Plugin)(nil)
+	_ gateway.PluginDoc             = (*Plugin)(nil)
+	_ gateway.ConfigApplier         = (*Plugin)(nil)
+	_ gateway.RouteHandler          = (*Plugin)(nil)
+	_ gateway.IntrospectContributor = (*Plugin)(nil)
 )
+
+// surfaceName is the tag the rpc surface stamps on the routers it serves. Like
+// mcp's "mcp" tag, it rides the introspect catalog and federates.
+const surfaceName = "rpc"
 
 // New returns the RPC surface plugin.
 //
@@ -82,6 +87,20 @@ func (p *Plugin) Doc() string {
 
 // Apply captures the gateway so ServeRoute can reach the Dispatch fabric.
 func (p *Plugin) Apply(g *gateway.Gateway) error { p.gw = g; return nil }
+
+// ContributeIntrospect tags this node's /rpc-served routers with the "rpc"
+// surface in the introspect catalog, so the catalog — local and federated —
+// records which services speak /rpc, symmetric with how mcp tags its tools. In
+// the default (serve-all) mode every registered router is served, so all are
+// tagged; under RequireMarker only routers that embed rpc.Served are.
+func (p *Plugin) ContributeIntrospect(_ context.Context, report *gateway.IntrospectReport, _ string, _ []string) error {
+	pred := func(sovrpc.RouterInfo) bool { return true }
+	if p.cfg.RequireMarker {
+		pred = sovrpc.Implements[ServedRouter]()
+	}
+	p.gw.TagSurface(report, surfaceName, pred)
+	return nil
+}
 
 // RoutePatterns claims the /rpc/ subtree. Framework endpoints (/rpc/_health,
 // _introspect, _batch, _register) are handled by core before plugin routes, and

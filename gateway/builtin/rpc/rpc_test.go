@@ -58,3 +58,34 @@ func TestRPC_RequireMarker(t *testing.T) {
 		t.Fatalf("unmarked should 404 in strict mode: %d %s", resp.Status, resp.Body)
 	}
 }
+
+func tagged(cat *gateway.IntrospectReport, name, surface string) bool {
+	rds := cat.Services[name]
+	return len(rds) > 0 && rds[0].HasSurface(surface)
+}
+
+// The rpc surface tags its served routers with the "rpc" surface in the
+// introspect catalog — full marker support, symmetric with mcp. Default tags
+// every served router; strict mode tags only rpc.Served routers.
+func TestRPC_TagsRPCSurface(t *testing.T) {
+	gw := gateway.New()
+	gw.MustUse(rpc.New())
+	gw.Register(&PlainRouter{})
+	gw.Register(&MarkedRouter{})
+	cat := gw.FederatedCatalog(context.Background())
+	if cat == nil || !tagged(cat, "Plain", "rpc") || !tagged(cat, "Marked", "rpc") {
+		t.Fatalf("default: both routers should be tagged rpc: %+v", cat)
+	}
+
+	gws := gateway.New()
+	gws.MustUse(rpc.New(rpc.Config{RequireMarker: true}))
+	gws.Register(&PlainRouter{})
+	gws.Register(&MarkedRouter{})
+	cs := gws.FederatedCatalog(context.Background())
+	if cs == nil || !tagged(cs, "Marked", "rpc") {
+		t.Fatalf("strict: marked should be tagged rpc: %+v", cs)
+	}
+	if tagged(cs, "Plain", "rpc") {
+		t.Fatalf("strict: unmarked should NOT be tagged rpc: %+v", cs)
+	}
+}

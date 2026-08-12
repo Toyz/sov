@@ -1,5 +1,7 @@
 package rpc
 
+import "slices"
+
 // ParamField describes one JSON field on a method's params object.
 // Used by Explorer / codegen / OpenAPI emission downstream.
 type ParamField struct {
@@ -75,13 +77,19 @@ type RouterDescriptor struct {
 	Router  string             `json:"router"` // wire name (URL segment)
 	Title   string             `json:"title"`  // group label for explorers
 	Methods []MethodDescriptor `json:"methods"`
-	// Surfaces names the non-/rpc surfaces that expose this router — e.g.
-	// "mcp" when a surface builtin advertises it as an MCP tool source. The
-	// engine NEVER sets this (it is surface-agnostic): a surface builtin stamps
-	// its own name via an IntrospectContributor, and because the tag lives on
-	// the descriptor it FEDERATES — a downstream aggregator that merges a
-	// remote node's catalog carries the remote's surface tags, so a surface can
-	// discover the services it should expose across the whole mesh, not just
-	// the local engine. Empty for a plain /rpc-only router.
+	// Surfaces names the surfaces that expose this router — e.g. "rpc" and/or
+	// "mcp". The engine NEVER sets this (it is surface-agnostic): a surface
+	// builtin stamps its own name via an IntrospectContributor (gateway.TagSurface),
+	// and because the tag lives on the descriptor it FEDERATES — a downstream
+	// aggregator that merges a remote node's catalog carries the remote's surface
+	// tags, so a surface can discover the services it should expose across the
+	// whole mesh, not just the local engine.
 	Surfaces []string `json:"surfaces,omitempty"`
+}
+
+// HasSurface reports whether this router is tagged as exposed on surfaceName
+// (see Surfaces). A surface builtin uses it to pick its routers out of the
+// federated catalog.
+func (rd RouterDescriptor) HasSurface(surfaceName string) bool {
+	return slices.Contains(rd.Surfaces, surfaceName)
 }

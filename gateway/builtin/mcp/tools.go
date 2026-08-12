@@ -53,7 +53,7 @@ type toolEntry struct {
 // so a tool always resolves back to the exact (service, method) it names —
 // local or across the mesh.
 func (p *Plugin) toolEntries(ctx context.Context) []toolEntry {
-	report := p.catalog(ctx)
+	report := p.gw.FederatedCatalog(ctx)
 	if report == nil {
 		return nil
 	}
@@ -65,7 +65,7 @@ func (p *Plugin) toolEntries(ctx context.Context) []toolEntry {
 	var out []toolEntry
 	for _, name := range names {
 		for _, rd := range report.Services[name] {
-			if !hasSurface(rd, surfaceName) {
+			if !rd.HasSurface(surfaceName) {
 				continue
 			}
 			for _, md := range rd.Methods {
