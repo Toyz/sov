@@ -35,6 +35,7 @@ func (e *Engine) Describe() []RouterDescriptor {
 				Method:   ent.wireName,
 				Title:    OperationTitle(ent.goName),
 				PostPath: fmt.Sprintf("/rpc/%s/%s", routerName, ent.wireName),
+				Perm:     ent.perm,
 			}
 			// Visibility: marker-method (router-wide) OR sov sentinel
 			// (per-method) declarations both feed the flags; hard wins.

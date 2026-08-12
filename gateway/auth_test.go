@@ -270,6 +270,54 @@ func TestAuthz_AnonymousIsEvaluated(t *testing.T) {
 	}
 }
 
+// ---- HELL-278 + HELL-280: request-aware, declarative authz ----------------
+
+// recordingAuthzRouter captures the last CheckParams the gateway sent, so
+// a test can assert Check saw the declared perm and the caller's headers.
+type recordingAuthzRouter struct{ last *CheckParams }
+
+func (r *recordingAuthzRouter) Check(ctx *rpc.Context, p *CheckParams) (*AuthzDecision, error) {
+	r.last = p
+	return &AuthzDecision{Allow: true}, nil
+}
+
+// PermGuardedRouter is a no-param router that declares a perm via the
+// AuthzRequirer marker — the case a params-struct tag can't cover.
+type PermGuardedRouter struct{}
+
+func (r *PermGuardedRouter) Do(ctx *rpc.Context) (string, error) { return "ok", nil }
+func (r *PermGuardedRouter) AuthzRequirements() map[string]string {
+	return map[string]string{"do": "pages:write"}
+}
+
+// The gateway must hand Check the method's DECLARED perm (HELL-280) AND the
+// caller's inbound headers (HELL-278), so per-tenant RBAC can be enforced
+// in one seam with no side map.
+func TestAuthz_CheckReceivesPermAndHeaders(t *testing.T) {
+	gw := New()
+	gw.RegisterAuth(&AuthRouter{})
+	rec := &recordingAuthzRouter{}
+	gw.RegisterAuthz(rec)
+	gw.Register(&PermGuardedRouter{})
+
+	resp := gw.Handle(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/PermGuarded/do",
+		Header: Header{"Authorization": "Bearer good-x", "X-Workspace": "ws_42"},
+	})
+	if resp.Status != 200 {
+		t.Fatalf("status = %d, body = %s", resp.Status, resp.Body)
+	}
+	if rec.last == nil {
+		t.Fatal("Check was never called")
+	}
+	if rec.last.Perm != "pages:write" {
+		t.Fatalf("Check.Perm = %q, want declared %q", rec.last.Perm, "pages:write")
+	}
+	if got := rec.last.Headers["X-Workspace"]; got != "ws_42" {
+		t.Fatalf("Check.Headers[X-Workspace] = %q, want the caller's tenant selector ws_42", got)
+	}
+}
+
 // ---- Framework RouteHandler bearer resolution -----------------------------
 
 // whoRoutePlugin is a RouteHandler owning a framework path (/rpc/_who).
@@ -278,8 +326,8 @@ func TestAuthz_AnonymousIsEvaluated(t *testing.T) {
 // always nil here and any subject-gated framework handler 401'd forever.
 type whoRoutePlugin struct{}
 
-func (whoRoutePlugin) PluginName() string        { return "who-route" }
-func (whoRoutePlugin) RoutePatterns() []string   { return []string{"/rpc/_who"} }
+func (whoRoutePlugin) PluginName() string      { return "who-route" }
+func (whoRoutePlugin) RoutePatterns() []string { return []string{"/rpc/_who"} }
 func (whoRoutePlugin) ServeRoute(_ context.Context, req *Request) *Response {
 	c, _ := req.User.(*Claims)
 	if c == nil || c.Subject == "" {

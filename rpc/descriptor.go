@@ -47,6 +47,11 @@ type MethodDescriptor struct {
 	// Empty for primitive/map results. The type catalog uses it to tag
 	// the type's usage role as "response" (data-ownership inference).
 	ResponseTypeName string `json:"responseTypeName,omitempty"`
+	// Perm is the OPAQUE declarative authz requirement the method declared
+	// (HELL-280), surfaced so the explorer/codegen can show "this method
+	// requires X" without re-reading struct tags. Empty when undeclared.
+	// Discovery only — the AuthzService, not this field, gates access.
+	Perm string `json:"perm,omitempty"`
 	// Internal marks a SOFT-hidden method: omitted from the default
 	// introspect report, but present (with this flag set) in the full
 	// payload served under the X-Sov-Introspect-Internal header so the

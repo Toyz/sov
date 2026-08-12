@@ -87,10 +87,30 @@ type VerifyParams struct {
 // AuthzService.Check. Claims is nil for anonymous requests; the authz
 // service is expected to handle that case (typically by returning
 // {Allow:false, Authenticate:true} for non-public methods).
+//
+// Check is request-aware, not claims-only (HELL-278). Two inputs beyond
+// identity let the AuthzService decide declaratively with no side map:
+//
+//   - Perm: the OPAQUE authz requirement the target method DECLARED
+//     (HELL-280) — reflected from a sov:"perm=…" sentinel or the router's
+//     AuthzRequirements() marker. The gateway carries it verbatim; only
+//     the AuthzService knows what "pages:write" or "public" means. Empty
+//     when the method declared none — the AuthzService picks the default
+//     (sov bakes in none). This is the static "what the method needs".
+//   - Headers: the caller's inbound request headers — the tenant/workspace
+//     selector (e.g. X-Workspace) the AuthzService needs to resolve a
+//     PER-SPACE grant. This is the dynamic "what the caller has, here".
+//
+// Together: perm (what's needed) + claims/headers (what's granted) = a
+// complete decision in one seam. Target-id-scoped checks that need the
+// store (a node must live inside a subtree) still belong in the handler —
+// Check gets headers, deliberately NOT decoded args.
 type CheckParams struct {
-	Claims  *Claims `json:"claims,omitempty"`
-	Service string  `json:"service"`
-	Method  string  `json:"method"`
+	Claims  *Claims           `json:"claims,omitempty"`
+	Service string            `json:"service"`
+	Method  string            `json:"method"`
+	Perm    string            `json:"perm,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // AuthBinding records which registered service is the auth verifier. A
@@ -216,12 +236,18 @@ func (g *Gateway) verifyToken(ctx context.Context, token string) (*Claims, error
 // checkAuthz calls the configured AuthzService.{check}. Returns nil if
 // allowed, an Error otherwise. Called on every request (including
 // anonymous ones) when an authz binding is configured.
-func (g *Gateway) checkAuthz(ctx context.Context, claims *Claims, service, method string) error {
+func (g *Gateway) checkAuthz(ctx context.Context, claims *Claims, service, method, perm string, headers Header) error {
 	if g.authzBinding == nil {
 		return nil
 	}
 	body, _ := json.Marshal(rpc.Request{
-		Args: mustJSON(CheckParams{Claims: claims, Service: service, Method: method}),
+		Args: mustJSON(CheckParams{
+			Claims:  claims,
+			Service: service,
+			Method:  method,
+			Perm:    perm,
+			Headers: headers,
+		}),
 	})
 	sub := &Request{
 		Method: http.MethodPost,
@@ -366,7 +392,13 @@ func (g *Gateway) authzMiddleware() Middleware {
 			if !ok {
 				return next(ctx, req)
 			}
-			if err := g.checkAuthz(ctx, claims, router, method); err != nil {
+			// Resolve the method's DECLARED authz requirement (HELL-280)
+			// from the local engine and hand it to Check alongside the
+			// caller's headers (HELL-278). Remote methods aren't in the
+			// local engine → perm is "" here and enforced at their home
+			// gateway; the AuthzService treats "" as its own default.
+			perm := g.engine.Perm(router, method)
+			if err := g.checkAuthz(ctx, claims, router, method, perm, req.Header); err != nil {
 				return ErrorResponseFromAny(err)
 			}
 			return next(ctx, req)

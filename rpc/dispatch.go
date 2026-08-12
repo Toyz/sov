@@ -20,6 +20,13 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 		if !e.HasRouter(router) {
 			return writeErr(NotFound("router %q not found", router))
 		}
+		// Wire method names are lowerFirst(GoName) (List → list). A caller
+		// sending the Go casing gets a bare "not found" that reads like a
+		// missing method — hint the correct wire name instead of making
+		// them re-derive the casing rule. See HELL-282.
+		if suggestion := e.suggestMethod(router, method); suggestion != "" {
+			return writeErr(NotFound("method %q not found on router %q; did you mean %q?", method, router, suggestion))
+		}
 		return writeErr(NotFound("method %q not found on router %q", method, router))
 	}
 
@@ -30,6 +37,7 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 	}
 
 	args := []reflect.Value{entry.router, reflect.ValueOf(ctx)}
+	var paramPtr any
 	if entry.hasParams {
 		ptr := reflect.New(entry.paramType)
 		if len(body) > 0 {
@@ -42,6 +50,16 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 			}
 		}
 		args = append(args, ptr)
+		paramPtr = ptr.Interface()
+	}
+
+	// Resource-scoped authz hook (HELL-283): the router may authorize the
+	// call in-process now that params are decoded and its store is reachable,
+	// before the handler runs. Deny surfaces verbatim; the handler is skipped.
+	if ma := e.authorizerFor(router); ma != nil {
+		if err := ma.AuthorizeMethod(ctx, method, paramPtr); err != nil {
+			return typedErr(err)
+		}
 	}
 
 	results := entry.method.Func.Call(args)

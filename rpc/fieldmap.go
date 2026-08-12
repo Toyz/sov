@@ -38,6 +38,12 @@ type FieldMap struct {
 	// introspection. Method-level directive, not a wire field.
 	Internal     bool
 	InternalHard bool
+	// Perm is the declarative per-method authz requirement (HELL-280), set
+	// by a `perm=…` directive on the blank `_` sentinel field. OPAQUE to
+	// the framework — the consumer's AuthzService interprets it; sov never
+	// parses the string. Empty when undeclared. Declaring it more than once
+	// on the sentinel is a build error.
+	Perm string
 }
 
 // FieldInfo is the per-field resolution of the tag grammar.
@@ -131,20 +137,36 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 		// it to hard. The sentinel never becomes a wire field.
 		if sf.Name == "_" {
 			if sovRaw, ok := sf.Tag.Lookup("sov"); ok {
-				toks := splitSovTokens(sovRaw)
-				if len(toks) == 0 || strings.TrimSpace(toks[0]) != "internal" {
-					return nil, fmt.Errorf("%s: blank `_` field sov tag %q must start with 'internal' (the method-level hide directive)", t.Name(), sovRaw)
-				}
-				fm.Internal = true
-				for _, tok := range toks[1:] {
-					switch strings.TrimSpace(tok) {
-					case "hard":
+				// The blank `_` sentinel carries method-level directives, in
+				// any order: `internal` (soft hide), `hard` (raise to hard
+				// hide; requires `internal`), and `perm=<token>` (declarative
+				// authz requirement, HELL-280 — opaque, never parsed here).
+				var sawInternal bool
+				for _, tok := range splitSovTokens(sovRaw) {
+					tok = strings.TrimSpace(tok)
+					switch {
+					case tok == "":
+						// trailing/empty token
+					case tok == "internal":
+						fm.Internal = true
+						sawInternal = true
+					case tok == "hard":
 						fm.InternalHard = true
-					case "":
-						// trailing comma
+					case strings.HasPrefix(tok, "perm="):
+						val := tok[len("perm="):]
+						if val == "" {
+							return nil, fmt.Errorf("%s: blank `_` field sov tag has empty perm= value", t.Name())
+						}
+						if fm.Perm != "" {
+							return nil, fmt.Errorf("%s: blank `_` field sov tag declares perm= more than once", t.Name())
+						}
+						fm.Perm = val
 					default:
-						return nil, fmt.Errorf("%s: blank `_` field sov tag has unknown directive %q (allowed: internal, hard)", t.Name(), tok)
+						return nil, fmt.Errorf("%s: blank `_` field sov tag has unknown directive %q (allowed: internal, hard, perm=…)", t.Name(), tok)
 					}
+				}
+				if fm.InternalHard && !sawInternal {
+					return nil, fmt.Errorf("%s: blank `_` field sov tag 'hard' requires 'internal' (use `sov:\"internal,hard\"`)", t.Name())
 				}
 			}
 			continue
