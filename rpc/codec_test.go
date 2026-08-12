@@ -109,6 +109,17 @@ func TestCodec_ErrorRoutedThroughCodec(t *testing.T) {
 	}
 }
 
+func TestCodec_NegotiableOnlyWithMultipleCodecs(t *testing.T) {
+	e := NewEngine()
+	if e.Negotiable() {
+		t.Fatal("a fresh engine (JSON only) must not be negotiable — the single-codec fast path")
+	}
+	e.RegisterCodec(rawCodec{})
+	if !e.Negotiable() {
+		t.Fatal("registering a second codec must flip negotiable on")
+	}
+}
+
 func TestCodec_DefaultIsJSON(t *testing.T) {
 	e := NewEngine()
 	if e.activeCodec().Name() != "json" {

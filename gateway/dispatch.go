@@ -168,10 +168,15 @@ func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req 
 	// registered business codec. Absent/unknown/json all resolve to the
 	// JSON default, so internal sub-dispatches (auth verify, authz check,
 	// batch entries) — which carry no codec Content-Type — stay JSON.
+	// Only negotiate when more than one codec is registered — the common
+	// JSON-only deployment skips the Content-Type parse entirely and Dispatch
+	// falls back to the default codec.
 	var selected rpc.Codec
-	if name := codecNameFromContentType(req.Header.Get("Content-Type")); name != "" {
-		selected = g.engine.ResolveCodec(name)
-		rc.SelectCodec(selected)
+	if g.engine.Negotiable() {
+		if name := codecNameFromContentType(req.Header.Get("Content-Type")); name != "" {
+			selected = g.engine.ResolveCodec(name)
+			rc.SelectCodec(selected)
+		}
 	}
 	// If the auth middleware resolved Claims, stash them on the context
 	// in TWO places: rc.User as the canonical "who is the caller" value
