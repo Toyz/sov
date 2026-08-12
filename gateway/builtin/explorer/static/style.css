@@ -137,6 +137,33 @@ main {
 }
 .method-item.is-internal .method-name { color: var(--muted); }
 
+/* perm chip: a method's declared authz requirement (opaque token) */
+.perm-chip {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  background: rgba(139, 233, 253, 0.12);
+  border: 1px solid rgba(139, 233, 253, 0.35);
+  border-radius: 10px;
+  padding: 1px 6px;
+}
+.perm-line {
+  margin: 8px 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.perm-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.perm-note { font-size: 11px; color: var(--muted); }
+
 /* Sidebar search (methods + types) + grouped sections */
 .sb-search {
   width: 100%;

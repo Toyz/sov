@@ -250,6 +250,13 @@ function renderMethodList(sb) {
           chip.textContent = 'no args';
           a.appendChild(chip);
         }
+        if (md.perm) {
+          const permChip = document.createElement('span');
+          permChip.className = 'perm-chip';
+          permChip.textContent = md.perm;
+          permChip.title = 'declared authz requirement (perm)';
+          a.appendChild(permChip);
+        }
         a.addEventListener('click', () => {
           state.selectedMethod = {router: rd.router, method: md.method};
           renderSidebar();
@@ -290,6 +297,13 @@ function renderMethodDetail(rd, md) {
   path.className = 'path';
   path.innerHTML = `<span class="post-chip">POST</span> ${escapeHTML(md.postPath)}`;
   detail.appendChild(path);
+
+  if (md.perm) {
+    const perm = document.createElement('div');
+    perm.className = 'perm-line';
+    perm.innerHTML = `<span class="perm-label">requires</span> <span class="perm-chip">${escapeHTML(md.perm)}</span> <span class="perm-note">declared authz requirement (opaque — your AuthzService decides)</span>`;
+    detail.appendChild(perm);
+  }
 
   detail.appendChild(sectionHead('Parameters'));
   if (md.hasParams && md.params && md.params.length) {
