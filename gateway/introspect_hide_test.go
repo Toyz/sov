@@ -82,6 +82,18 @@ func (r *GoCasedHideRouter) Open(ctx *rpc.Context) (string, error)   { return "o
 func (r *GoCasedHideRouter) Secret(ctx *rpc.Context) (string, error) { return "s", nil }
 func (r *GoCasedHideRouter) HiddenMethods() []string                 { return []string{"Secret"} } // Go-cased
 
+// The declared perm (HELL-280) must survive the introspect strip/split
+// pipeline into the public catalog so the explorer/codegen can show it.
+func TestIntrospect_EmitsPerm(t *testing.T) {
+	gw := New()
+	gw.Register(&PermGuardedRouter{}) // AuthzRequirements: do -> pages:write
+	gw.ExposeIntrospect()
+	body := string(gw.IntrospectBody(context.Background(), &Request{Header: Header{}}).Body)
+	if !strings.Contains(body, `"perm":"pages:write"`) {
+		t.Fatalf("introspect body missing declared perm: %s", body)
+	}
+}
+
 func TestIntrospect_GoCasedHiddenMarkerStillHides(t *testing.T) {
 	gw := New()
 	gw.Register(&GoCasedHideRouter{})
