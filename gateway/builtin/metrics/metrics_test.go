@@ -27,7 +27,7 @@ func mustUse(t *testing.T, gw *gateway.Gateway, plugins ...any) {
 }
 
 func TestMetrics_RequiresRequestID(t *testing.T) {
-	gw := gateway.New()
+	gw := newGW()
 	if err := gw.Use(metrics.New(metrics.Config{})); err != nil {
 		t.Fatalf("Use accepts plugins in any order: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestMetrics_RequiresRequestID(t *testing.T) {
 }
 
 func TestMetrics_DispatchAndExpose(t *testing.T) {
-	gw := gateway.New()
+	gw := newGW()
 	mustUse(t, gw,
 		requestid.New(requestid.Config{}),
 		metrics.New(metrics.Config{}),
@@ -85,7 +85,7 @@ func TestMetrics_DispatchAndExpose(t *testing.T) {
 }
 
 func TestMetrics_SnapshotCapability(t *testing.T) {
-	gw := gateway.New()
+	gw := newGW()
 	mustUse(t, gw,
 		requestid.New(requestid.Config{}),
 		metrics.New(metrics.Config{}),
@@ -120,7 +120,7 @@ func TestMetrics_SnapshotCapability(t *testing.T) {
 }
 
 func TestMetrics_IntrospectAugment(t *testing.T) {
-	gw := gateway.New()
+	gw := newGW()
 	gw.ExposeIntrospect() // endpoint is opt-in; this test reads its body
 	mustUse(t, gw,
 		requestid.New(requestid.Config{}),

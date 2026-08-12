@@ -45,20 +45,24 @@ func (g *Gateway) Authorize(ctx, claims *Claims, service, method string, headers
 
 ---
 
-## The RPC surface is just a surface
+## The RPC surface is a builtin, exactly like MCP
 
-`/rpc/{router}/{method}` is served by a **replaceable seam**, not hardcoded
-routing. It defaults to the built-in surface (which hands off to `Dispatch`), so
-every gateway serves `/rpc` out of the box. Two options change that:
+`/rpc/{router}/{method}` is **not** hardcoded in core — it is a builtin plugin,
+`gateway/builtin/rpc`, the same way `gateway/builtin/mcp` is the MCP surface. You
+register it and the gateway auto-routes `/rpc` to it (a `RouteHandler` at
+`"/rpc/"`, matched by longest-prefix so it never shadows `/rpc/_explorer/` or
+framework endpoints):
 
 ```go
-gateway.New(gateway.WithoutRPCSurface())   // node has NO /rpc; other surfaces still work
-gateway.New(gateway.WithRPCSurface(h))      // custom wire format on /rpc, still over Dispatch
+gw.Use(rpc.New())   // serve /rpc/{router}/{method}
+gw.Use(mcp.New(...)) // serve /mcp — same shape
 ```
 
-Because the fabric is independent of the surface, a node built
-`WithoutRPCSurface()` still serves its registered routers over MCP — an
-**MCP-only node** with no `/rpc` endpoint.
+The presets (`NewMonolith`/`NewPod`/`NewRegistry`/`NewHybrid`) register `rpc` for
+you, so preset-built gateways serve `/rpc` out of the box. A gateway that never
+registers it simply doesn't speak `/rpc` — the `Dispatch` fabric still serves
+other surfaces (MCP) over the same routers, so an **MCP-only node** is just a
+gateway that Uses `mcp` and not `rpc`.
 
 ---
 
@@ -181,7 +185,7 @@ enforced by B across the mesh on both surfaces.
 |---|---|
 | Serve a router over `/rpc` | `gw.Register(&Foo{})` (default) |
 | Serve it as an MCP tool too | embed `mcp.Tool`, `gw.Use(mcp.New(...))` |
-| A node with no `/rpc` | `gateway.New(gateway.WithoutRPCSurface())` |
-| A custom `/rpc` wire | `gateway.New(gateway.WithRPCSurface(h))` |
+| Serve `/rpc` | `gw.Use(rpc.New())` (presets do this for you) |
+| A node with no `/rpc` (MCP-only) | just don't Use `rpc` — Use `mcp` |
 | Find routers by capability | `eng.Find(rpc.Implements[T]())` |
 | Mesh a surface across nodes | edge runs `registry.New(...)`; `RegisterRemote(..., RemoteOptions{Introspect: true})` |

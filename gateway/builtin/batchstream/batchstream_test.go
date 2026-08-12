@@ -68,7 +68,7 @@ type bsEchoRouter struct{}
 func (bsEchoRouter) Ping(ctx *rpc.Context) (string, error) { return "pong", nil }
 
 func TestBatchStream_StreamsFramePerEntry(t *testing.T) {
-	gw := gateway.New()
+	gw := newGW()
 	gw.RegisterAuth(&bsAuthRouter{})
 	gw.Register(&bsEchoRouter{})
 	if err := gw.Use(batchstream.New()); err != nil {

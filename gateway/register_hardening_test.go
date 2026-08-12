@@ -38,7 +38,7 @@ func (p testMeshSecretPlugin) ParseHeaders(req *Request) *rpc.Error {
 // use this in place of the dropped WithMeshSecret Option.
 func useMeshSecret(t *testing.T, secret []byte, opts ...Option) *Gateway {
 	t.Helper()
-	gw := New(opts...)
+	gw := newGW(opts...)
 	if err := gw.Use(registry.New(registry.Config{})); err != nil {
 		t.Fatalf("Use registry: %v", err)
 	}

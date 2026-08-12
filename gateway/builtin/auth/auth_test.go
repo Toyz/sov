@@ -22,7 +22,7 @@ func TestAuth_TranslatesClaimsToHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	gw := gateway.New()
+	gw := newGW()
 	gw.RegisterRemote("Echo", upstream.URL, time.Minute)
 	if err := gw.Use(New(Config{})); err != nil {
 		t.Fatalf("Use: %v", err)
@@ -53,7 +53,7 @@ func TestAuth_SkipsAnonymous(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	gw := gateway.New()
+	gw := newGW()
 	gw.RegisterRemote("Echo", upstream.URL, time.Minute)
 	_ = gw.Use(New(Config{}))
 

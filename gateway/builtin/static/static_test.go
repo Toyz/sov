@@ -23,7 +23,7 @@ func tree() fstest.MapFS {
 
 func serve(t *testing.T, p *static.Plugin, method, path string) *gateway.Response {
 	t.Helper()
-	gw := gateway.New()
+	gw := newGW()
 	gw.ExposeIntrospect() // opt-in endpoint; TestRPCNotShadowed asserts it isn't shadowed
 	if err := gw.Use(p); err != nil {
 		t.Fatalf("Use static: %v", err)
@@ -168,7 +168,7 @@ func (PingRouter) Ping(ctx *rpc.Context) (string, error) { return "pong", nil }
 // business dispatch, and "/" still serves the SPA. Exercises the full chain:
 // reserved-decline + gateway nil-fall-through.
 func TestStaticDoesNotShadowBusinessRPC(t *testing.T) {
-	gw := gateway.New()
+	gw := newGW()
 	gw.Register(&PingRouter{})
 	gw.MustUse(static.New(static.Config{FS: tree(), SPAFallback: true})) // catch-all "/"
 

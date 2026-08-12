@@ -222,12 +222,12 @@ func TestMCP_ToolsCallRidesAuth(t *testing.T) {
 	}
 }
 
-// An MCP-only node: the /rpc surface is OFF (WithoutRPCSurface), so /rpc 404s,
-// but the SAME registered router still serves as an MCP tool — MCP routes
-// through the Dispatch fabric, which is independent of the /rpc surface. This is
-// "rpc is just a surface" made concrete.
-func TestMCP_RPCSurfaceDisabled_MCPStillServes(t *testing.T) {
-	gw := gateway.New(gateway.WithoutRPCSurface())
+// An MCP-only node: it never registers the rpc builtin, so /rpc 404s, but the
+// SAME registered router still serves as an MCP tool — MCP routes through the
+// Dispatch fabric, which is independent of the /rpc surface. "rpc is just a
+// surface" made concrete: don't Use it, and the node simply doesn't speak /rpc.
+func TestMCP_NoRPCBuiltin_MCPStillServes(t *testing.T) {
+	gw := gateway.New() // no rpc.New() -> no /rpc surface
 	gw.Register(&NoteToolsRouter{})
 	gw.MustUse(mcp.New(mcp.Config{}))
 

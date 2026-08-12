@@ -35,6 +35,7 @@ import (
 	"github.com/Toyz/sov/gateway/builtin/introspect"
 	"github.com/Toyz/sov/gateway/builtin/mcp"
 	"github.com/Toyz/sov/gateway/builtin/registry"
+	"github.com/Toyz/sov/gateway/builtin/rpc"
 )
 
 // The tool wrappers: embed the chirp router (its methods promote onto the
@@ -72,6 +73,7 @@ func main() {
 	gwB.Register(&User{UserRouter: &users.UserRouter{Store: users.NewMemoryStore()}})
 	gwB.Register(&Chirp{ChirpRouter: &chirps.ChirpRouter{Store: chirps.NewMemoryStore()}})
 	gwB.Register(&Feed{FeedRouter: &feed.FeedRouter{Client: feed.NewClientAdapter(gwB.LocalClient())}})
+	gwB.MustUse(rpc.New())                                       // the /rpc surface — a builtin
 	gwB.MustUse(mcp.New(mcp.Config{ServerName: "chirp-node-b"})) // tags B's tool routers in introspect
 	gwB.MustUse(introspect.New())                               // exposes B's /rpc/_introspect for the fan-out
 	go func() { log.Fatal(gwB.ListenAndServe(ctx, bAddr)) }()
@@ -79,6 +81,7 @@ func main() {
 
 	// ---- node A: the edge — serves RPC + MCP, business lives on B ----
 	gwA := gateway.New()
+	gwA.MustUse(rpc.New()) // edge A serves /rpc too (proxied to B)
 	gwA.MustUse(registry.New(registry.Config{AllowedNames: []string{"Auth", "Authz", "User", "Chirp", "Feed"}}))
 	gwA.MustUse(mcp.New(mcp.Config{ServerName: "chirp-edge-a"}))
 	gwA.MustUse(introspect.New())

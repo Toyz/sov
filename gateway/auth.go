@@ -216,7 +216,7 @@ func (g *Gateway) verifyToken(ctx context.Context, token string) (*Claims, error
 		Header: Header{}, // never forward inbound headers for the verify call
 		Body:   body,
 	}
-	resp := g.routeBusiness(ctx, sub)
+	resp := g.Dispatch(ctx, sub)
 	if resp.Status >= 400 {
 		return nil, claimsErrorFromBody(resp)
 	}
@@ -255,7 +255,7 @@ func (g *Gateway) checkAuthz(ctx context.Context, claims *Claims, service, metho
 		Header: Header{},
 		Body:   body,
 	}
-	resp := g.routeBusiness(ctx, sub)
+	resp := g.Dispatch(ctx, sub)
 	if resp.Status >= 400 {
 		return claimsErrorFromBody(resp)
 	}

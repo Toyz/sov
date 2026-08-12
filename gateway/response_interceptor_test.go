@@ -42,7 +42,7 @@ type RespPingRouter struct{}
 func (RespPingRouter) Hello(_ *rpc.Context) (string, error) { return "hi", nil }
 
 func TestResponseInterceptor_RegistrationOrder(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	a := &stamper{name: "a"}
 	b := &stamper{name: "b"}
 	c := &stamper{name: "c"}
@@ -75,7 +75,7 @@ func TestResponseInterceptor_RegistrationOrder(t *testing.T) {
 }
 
 func TestResponseInterceptor_FailingOneDoesntStopOthers(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	a := &stamper{name: "a", fail: true}
 	b := &stamper{name: "b"}
 	if err := gw.Use(a); err != nil {

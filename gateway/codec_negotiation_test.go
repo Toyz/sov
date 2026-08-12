@@ -37,7 +37,7 @@ func (bnEchoRouter) Say(ctx *rpc.Context, p *bnEchoParams) (string, error) { ret
 // The negotiated codec is reflected on the response Content-Type so the
 // caller decodes the body with the codec it sent.
 func TestCodec_ResponseContentTypeReflectsCodec(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 	gw.Engine().RegisterCodec(testCodec{})
@@ -56,7 +56,7 @@ func TestCodec_ResponseContentTypeReflectsCodec(t *testing.T) {
 // no-op test decode would drop the param and Say would echo "" instead of
 // the sent value.
 func TestCodec_BatchEntriesPinnedToJSON(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&bnEchoRouter{})
 	gw.Engine().RegisterCodec(testCodec{})
@@ -81,7 +81,7 @@ func TestCodec_BatchEntriesPinnedToJSON(t *testing.T) {
 // A registered codec is selected PER REQUEST by Content-Type; absent it, the
 // JSON default is used.
 func TestCodec_NegotiatedPerRequest(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 	gw.Engine().RegisterCodec(testCodec{})
@@ -112,7 +112,7 @@ func TestCodec_NegotiatedPerRequest(t *testing.T) {
 // business codec: authz short-circuits in authzMiddleware, before the
 // engine's per-request codec ever applies.
 func TestCodec_InternalAuthzStaysJSON(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.RegisterAuthz(&AuthzRouter{denyMethod: "me"})
 	gw.Register(&WhoRouter{})

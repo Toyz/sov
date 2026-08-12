@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/Toyz/sov/rpc"
@@ -40,24 +41,33 @@ func (g *Gateway) snapshotPlugins() []*pluginEntry {
 	return append([]*pluginEntry(nil), g.plugins...)
 }
 
-// matchPluginRoute returns the first registered plugin route whose
-// pattern matches req.Path. Match order is registration order.
-func (g *Gateway) matchPluginRoute(path string) (pluginRoute, bool) {
+// pluginRoutesFor returns every registered plugin route whose pattern matches
+// path, MOST-SPECIFIC first (longest pattern wins; an exact match is longest of
+// all). handleInner tries them in that order, so a broad surface like the /rpc
+// builtin ("/rpc/") never shadows a more-specific route ("/rpc/_explorer/") or a
+// catch-all SPA ("/"): specificity decides, and a handler that declines (returns
+// nil) falls through to the next-broadest match. Registration order no longer
+// affects correctness.
+func (g *Gateway) pluginRoutesFor(path string) []pluginRoute {
 	g.muPlugins.RLock()
 	snap := g.pluginRoutes
 	g.muPlugins.RUnlock()
+	var matches []pluginRoute
 	for _, r := range snap {
 		if r.subtree {
 			if len(path) >= len(r.pattern) && path[:len(r.pattern)] == r.pattern {
-				return r, true
+				matches = append(matches, r)
 			}
 			continue
 		}
 		if path == r.pattern {
-			return r, true
+			matches = append(matches, r)
 		}
 	}
-	return pluginRoute{}, false
+	sort.SliceStable(matches, func(i, j int) bool {
+		return len(matches[i].pattern) > len(matches[j].pattern)
+	})
+	return matches
 }
 
 // callHeaderInjectors fires every registered HeaderInjector on hreq.

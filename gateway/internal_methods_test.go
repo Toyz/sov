@@ -119,7 +119,7 @@ func hasService(rpt *IntrospectReport, router string) bool {
 // ---- Tests -----------------------------------------------------------------
 
 func TestInternal_AuthzCheckHardHidden(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.RegisterAuthz(&DemoAuthzRouter{})
 
@@ -144,7 +144,7 @@ func TestInternal_AuthzCheckHardHidden(t *testing.T) {
 }
 
 func TestInternal_SoftHideMarkerAndTag(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.Register(&SoftHideRouter{})
 	gw.Register(&TagHideRouter{})
 
@@ -178,7 +178,7 @@ func TestInternal_SoftHideMarkerAndTag(t *testing.T) {
 }
 
 func TestInternal_HardTagAlsoNeverRevealed(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.Register(&TagHideRouter{})
 
 	for _, internal := range []bool{false, true} {
@@ -190,7 +190,7 @@ func TestInternal_HardTagAlsoNeverRevealed(t *testing.T) {
 }
 
 func TestInternal_TypePrunedWhenOnlyUsedBySoftMethod(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.Register(&SoftHideRouter{})
 
 	pub := introspectReport(t, gw, false)
@@ -204,7 +204,7 @@ func TestInternal_TypePrunedWhenOnlyUsedBySoftMethod(t *testing.T) {
 }
 
 func TestInternal_HardHiddenStillDispatchable(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	gw.Register(&OpsRouter{})
 
 	// Absent from both payloads.

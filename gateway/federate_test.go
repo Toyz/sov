@@ -152,7 +152,7 @@ func TestFederate_RejectsRoleClaimWhenFederating(t *testing.T) {
 // with NO SealVerifier/UpstreamTrustPolicy must BOOT (network-trust model),
 // not refuse. Per-request crypto is opt-in hardening, not mandatory.
 func TestFederate_TrustByDefaultBootsWithoutProof(t *testing.T) {
-	gw := New(WithTrustUpstreamClaims(true))
+	gw := newGW(WithTrustUpstreamClaims(true))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := gw.ListenAndServe(ctx, ":0")
@@ -167,7 +167,7 @@ func (testSealVerifierPlugin) PluginName() string                    { return "t
 func (testSealVerifierPlugin) VerifySeal(_ map[string][]string) bool { return true }
 
 func TestFederate_TrustGuardAcceptsWithHMAC(t *testing.T) {
-	gw := New(WithTrustUpstreamClaims(true))
+	gw := newGW(WithTrustUpstreamClaims(true))
 	if err := gw.Use(testSealVerifierPlugin{}); err != nil {
 		t.Fatalf("Use seal verifier: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestFederate_TrustGuardAcceptsWithAllowlist(t *testing.T) {
 			t.Fatalf("unexpected panic with allowlist: %v", r)
 		}
 	}()
-	gw := New(WithTrustUpstreamClaims(true))
+	gw := newGW(WithTrustUpstreamClaims(true))
 	if err := gw.Use(testUpstreamTrustPlugin{allow: []string{"http://prime:8080"}}); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestFederate_BatchCascadesThroughTeamGateway(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	gw := New()
+	gw := newGW()
 	// Federation registers 3 services to one team gateway.
 	if r := postBatch(withRegistry(gw, t), registerFederationBody("team-a", upstream.URL, []string{"X", "Y", "Z"})); r.Status != 200 {
 		t.Fatalf("register: %d", r.Status)

@@ -86,7 +86,7 @@ func TestRecovery_SoftSeverityCaughtRequestSucceeds(t *testing.T) {
 
 func TestRecovery_ResponseSeverityReturnsOverride(t *testing.T) {
 	rec := &capturingRecovery{override: &Response{Status: 418, Body: []byte("teapot")}}
-	gw := New()
+	gw := newGW()
 	if err := gw.Use(rec); err != nil {
 		t.Fatalf("Use rec: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestRecovery_ResponseSeverityReturnsOverride(t *testing.T) {
 }
 
 func TestRecovery_HaltSeverityAbortsBoot(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	if err := gw.Use(panickyBootValidator{}); err != nil {
 		t.Fatalf("Use: %v", err)
 	}

@@ -16,7 +16,7 @@ import (
 // BenchmarkHandleLocal: full gateway dispatch (middleware chain + engine)
 // for an in-process service. The PEMM "local" mode — no network.
 func BenchmarkHandleLocal(b *testing.B) {
-	gw := New()
+	gw := newGW()
 	gw.Register(&EchoRouter{})
 	req := &Request{Method: http.MethodPost, Path: "/rpc/Echo/ping", Header: Header{}, Body: []byte(`{"args":{}}`)}
 
@@ -40,7 +40,7 @@ func BenchmarkHandleRemote(b *testing.B) {
 	}))
 	defer remote.Close()
 
-	gw := New()
+	gw := newGW()
 	gw.RegisterRemote("Echo", remote.URL, time.Minute)
 	req := &Request{Method: http.MethodPost, Path: "/rpc/Echo/ping", Header: Header{}, Body: []byte(`{"args":{}}`)}
 
@@ -76,7 +76,7 @@ func BenchmarkBatchCoalesce(b *testing.B) {
 	}))
 	defer remote.Close()
 
-	gw := New()
+	gw := newGW()
 	if err := gw.Use(batch.New(batch.Config{})); err != nil {
 		b.Fatalf("use batch: %v", err)
 	}

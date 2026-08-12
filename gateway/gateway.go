@@ -25,15 +25,6 @@ type Gateway struct {
 	proxy         *http.Client
 	dispatch      Handler // wrapped chain (middleware → handle)
 
-	// rpcSurface is the handler for /rpc/{router}/{method} business calls —
-	// the RPC surface as a REPLACEABLE seam rather than hardcoded routing. It
-	// defaults to routeBusiness (parse the /rpc wire, apply surface policy, then
-	// hand off to the Dispatch mesh fabric). WithoutRPCSurface swaps in a 404
-	// handler for a node that speaks only another surface (e.g. MCP-only) — the
-	// Dispatch fabric still serves those surfaces, so tools keep working with no
-	// /rpc endpoint. WithRPCSurface overrides it entirely (custom wire format).
-	rpcSurface Handler
-
 	// Auth + authz bindings. Both optional. The gateway calls the
 	// designated service via its own dispatch path for every request
 	// (with caching on the auth side).
@@ -95,17 +86,6 @@ type Options struct {
 	// Redis/memcached-backed impl to share auth-verify results across a
 	// fleet of gateway replicas. Default: per-replica in-memory.
 	ClaimsCache ClaimsCache
-	// RPCSurface overrides the handler for /rpc/{router}/{method} business
-	// calls. Default: the built-in surface (routeBusiness -> Dispatch). Set a
-	// custom Handler to speak a different wire format on /rpc while still using
-	// the mesh Dispatch fabric underneath.
-	RPCSurface Handler
-	// DisableRPCSurface turns the /rpc business surface OFF: /rpc/{router}/
-	// {method} returns 404. The Dispatch mesh fabric is unaffected, so other
-	// surfaces (MCP) that route through it keep serving the same registered
-	// routers — an MCP-only node with no /rpc endpoint. Ignored if RPCSurface
-	// is set.
-	DisableRPCSurface bool
 }
 
 // Middleware wraps the gateway's request handler. Return a non-nil
@@ -139,17 +119,6 @@ func WithProxyClient(c *http.Client) Option { return func(o *Options) { o.ProxyC
 // per-replica). Pass a shared (e.g. Redis) implementation so gateway
 // replicas reuse each other's AuthService.verify results. See ClaimsCache.
 func WithClaimsCache(c ClaimsCache) Option { return func(o *Options) { o.ClaimsCache = c } }
-
-// WithRPCSurface overrides the /rpc business surface with a custom handler —
-// e.g. a different wire format on /rpc that still routes through the Dispatch
-// mesh fabric underneath. See Options.RPCSurface.
-func WithRPCSurface(h Handler) Option { return func(o *Options) { o.RPCSurface = h } }
-
-// WithoutRPCSurface turns the /rpc business surface OFF (a node that speaks only
-// another surface, e.g. MCP). /rpc/{router}/{method} returns 404; the Dispatch
-// mesh fabric is unaffected, so surfaces routing through it still serve the
-// registered routers. See Options.DisableRPCSurface.
-func WithoutRPCSurface() Option { return func(o *Options) { o.DisableRPCSurface = true } }
 
 // WithTrustUpstreamClaims is a top-level lift of NetHTTPOptions.
 // TrustUpstreamClaims so consumers don't have to construct a server by
@@ -220,19 +189,6 @@ func New(opts ...Option) *Gateway {
 		middlewares:   append([]Middleware{}, o.Middleware...),
 	}
 	g.defaultRecovery = &defaultRecoveryHandler{gw: g}
-	// RPC surface: the /rpc business handler as a replaceable seam. Default is
-	// the built-in surface (routeBusiness, which hands off to Dispatch);
-	// WithoutRPCSurface swaps a 404 handler (MCP-only node); WithRPCSurface
-	// overrides with a custom wire. The Dispatch fabric is independent of this
-	// choice, so non-/rpc surfaces keep serving registered routers either way.
-	switch {
-	case o.RPCSurface != nil:
-		g.rpcSurface = o.RPCSurface
-	case o.DisableRPCSurface:
-		g.rpcSurface = g.rpcDisabled
-	default:
-		g.rpcSurface = Handler(g.routeBusiness)
-	}
 	// Route rpc.Engine boot warnings (HELL-281) through the gateway's
 	// structured logger instead of the stdlib log package. Resolved
 	// dynamically at warn-time, so a Logger plugin registered later is

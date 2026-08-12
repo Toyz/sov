@@ -59,13 +59,13 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 		}
 		return resp
 	}
-	// Plugin-owned routes via RouteHandler. Registered after framework
-	// endpoints so a plugin cannot shadow /rpc/_health, _introspect,
-	// _batch. A handler that returns nil DECLINES the request — routing
-	// falls through to business dispatch. This lets a broad catch-all
-	// mount (e.g. a static SPA plugin at "/") coexist with business RPC
-	// routes by declining the paths it doesn't own (e.g. "/rpc/...").
-	if route, ok := g.matchPluginRoute(req.Path); ok {
+	// Plugin-owned routes via RouteHandler, tried MOST-SPECIFIC first (see
+	// pluginRoutesFor). Framework endpoints (_health, _introspect, _batch,
+	// _register) were already handled above, so a plugin cannot shadow them. A
+	// handler returning nil DECLINES; routing continues to the next-broadest
+	// match. This is how the /rpc surface builtin ("/rpc/") coexists with a
+	// more-specific /rpc/_explorer/ plugin and a catch-all "/" SPA.
+	for _, route := range g.pluginRoutesFor(req.Path) {
 		if resp := route.handler(ctx, req); resp != nil {
 			if resp.Mode == "" {
 				resp.Mode = ModePlugin
@@ -73,16 +73,10 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 			return resp
 		}
 	}
-	// The RPC surface is a replaceable seam (default routeBusiness; 404 when
-	// disabled for an MCP-only node; a custom Handler via WithRPCSurface).
-	return g.rpcSurface(ctx, req)
-}
-
-// rpcDisabled is the RPC surface installed by WithoutRPCSurface: business /rpc
-// calls 404, while the Dispatch mesh fabric keeps serving other surfaces that
-// route through it (e.g. MCP tools over the same registered routers).
-func (g *Gateway) rpcDisabled(_ context.Context, _ *Request) *Response {
-	return ErrorResponse(rpc.NotFound("no rpc surface on this node"))
+	// No surface claimed it. A gateway with no rpc builtin (gw.Use(rpc.New()))
+	// simply doesn't speak the /rpc surface — the Dispatch fabric still serves
+	// other surfaces (MCP) over the same registered routers.
+	return ErrorResponse(rpc.NotFound("no surface for %q — register a surface plugin (e.g. rpc.New())", req.Path))
 }
 
 // errCodeFromBody peeks at a response body looking for {"error":{"code":...}}.
@@ -126,26 +120,6 @@ func codecNameFromContentType(ct string) string {
 		return "" // the default; no per-request selection needed
 	}
 	return sub
-}
-
-// routeBusiness handles non-framework /rpc/{router}/{method} dispatch.
-// Exported-ish (lowercase but used from framework.go) so _batch can fan
-// out through the same path.
-func (g *Gateway) routeBusiness(ctx context.Context, req *Request) *Response {
-	if req.Method != "" && req.Method != http.MethodPost {
-		return ErrorResponse(&rpc.Error{Status: 405, Code: "BAD_REQUEST", Message: "method not allowed"})
-	}
-	router, method, ok := rpc.SplitRPCPath(req.Path)
-	if !ok {
-		return ErrorResponse(rpc.NotFound("path must be /rpc/{router}/{method}"))
-	}
-	if strings.HasPrefix(router, "_") {
-		return ErrorResponse(rpc.NotFound("router %q reserved", router))
-	}
-	if strings.HasPrefix(method, "_") {
-		return ErrorResponse(rpc.NotFound("method %q is internal-network only", method))
-	}
-	return g.Dispatch(ctx, req)
 }
 
 // Dispatch is the mesh fabric. It resolves req's service and routes the call to

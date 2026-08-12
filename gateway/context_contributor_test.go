@@ -29,7 +29,7 @@ func (r *CtxReadRouter) Read(ctx *rpc.Context) (string, error) {
 }
 
 func TestContextContributor_LocalDispatchSeesStashedValue(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	if err := gw.Use(stashPlugin{key: "test.key", value: "from-plugin"}); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestContextContributor_LocalDispatchSeesStashedValue(t *testing.T) {
 }
 
 func TestContextContributor_MultipleContributorsRunInOrder(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	_ = gw.Use(stashPlugin{key: "k", value: "first"})
 	_ = gw.Use(stashPlugin{key: "k", value: "second"}) // overwrites first
 	r := &CtxReadRouter{}
@@ -65,7 +65,7 @@ func TestContextContributor_MultipleContributorsRunInOrder(t *testing.T) {
 
 // More targeted: contributor sets the key handler reads.
 func TestContextContributor_OverwriteOrder(t *testing.T) {
-	gw := New()
+	gw := newGW()
 	_ = gw.Use(stashPlugin{key: "test.key", value: "first"})
 	_ = gw.Use(stashPlugin{key: "test.key", value: "second"})
 	r := &CtxReadRouter{}

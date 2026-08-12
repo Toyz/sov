@@ -42,7 +42,7 @@ func (s *spyCache) Put(token string, cl *Claims) {
 
 func TestClaimsCache_CustomIsConsulted(t *testing.T) {
 	spy := &spyCache{m: map[string]*Claims{}}
-	gw := New(WithClaimsCache(spy))
+	gw := newGW(WithClaimsCache(spy))
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 
