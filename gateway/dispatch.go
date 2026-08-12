@@ -136,23 +136,40 @@ func (g *Gateway) routeBusiness(ctx context.Context, req *Request) *Response {
 	if strings.HasPrefix(method, "_") {
 		return ErrorResponse(rpc.NotFound("method %q is internal-network only", method))
 	}
+	return g.Dispatch(ctx, req)
+}
 
+// Dispatch is the mesh fabric. It resolves req's service and routes the call to
+// wherever that service lives — the local engine, an in-process peer gateway,
+// or a remote pod over HTTP — and returns the response. It is protocol-agnostic:
+// ANY surface (the /rpc adapter, MCP tools, batch) builds a Request whose Path
+// is /rpc/{service}/{method} and calls Dispatch; the surface never knows or
+// cares whether the service is local or across the mesh. That single seam is
+// what lets any surface mesh with no surface-specific routing code — a tool
+// whose service is federated to another node just resolves remote here.
+//
+// Dispatch does NOT run the auth/authz middleware: a caller that reaches it
+// OUTSIDE the HTTP chain (an MCP tool call, an internal fan-out) owns identity
+// (set req.User) and authorization (call Authorize first). The /rpc HTTP path
+// still runs the full middleware chain before landing here via routeBusiness.
+func (g *Gateway) Dispatch(ctx context.Context, req *Request) *Response {
+	router, method, ok := rpc.SplitRPCPath(req.Path)
+	if !ok {
+		return ErrorResponse(rpc.NotFound("path must be /rpc/{router}/{method}"))
+	}
 	endpoint, ok := g.resolver.Resolve(ctx, router)
 	if !ok {
 		return ErrorResponse(rpc.NotFound("service %q not registered", router))
 	}
 	if endpoint.Peer != nil {
-		// Nested PEMM: another gateway in the same binary handles
-		// this call in-process. Mode label distinguishes peer hops
-		// from local engine calls.
+		// Nested PEMM: another gateway in the same binary handles this call
+		// in-process. Mode label distinguishes peer hops from local engine
+		// calls — the peer labels its own response "local", but from THIS
+		// gateway's observability perspective the call crossed a peer hop.
 		resp := endpoint.Peer(ctx, req)
 		if resp == nil {
 			return ErrorResponse(rpc.Internal("peer returned nil response"))
 		}
-		// Always overwrite Mode — the peer's own dispatch labels its
-		// own response (typically "local"), but from THIS gateway's
-		// observability perspective the call crossed a peer hop. The
-		// peer gateway's audit (if installed) still saw it as local.
 		resp.Mode = ModePeer
 		return resp
 	}
