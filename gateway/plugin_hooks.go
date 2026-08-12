@@ -41,33 +41,45 @@ func (g *Gateway) snapshotPlugins() []*pluginEntry {
 	return append([]*pluginEntry(nil), g.plugins...)
 }
 
-// pluginRoutesFor returns every registered plugin route whose pattern matches
-// path, MOST-SPECIFIC first (longest pattern wins; an exact match is longest of
-// all). handleInner tries them in that order, so a broad surface like the /rpc
-// builtin ("/rpc/") never shadows a more-specific route ("/rpc/_explorer/") or a
-// catch-all SPA ("/"): specificity decides, and a handler that declines (returns
-// nil) falls through to the next-broadest match. Registration order no longer
-// affects correctness.
-func (g *Gateway) pluginRoutesFor(path string) []pluginRoute {
-	g.muPlugins.RLock()
-	snap := g.pluginRoutes
-	g.muPlugins.RUnlock()
-	var matches []pluginRoute
-	for _, r := range snap {
-		if r.subtree {
-			if len(path) >= len(r.pattern) && path[:len(r.pattern)] == r.pattern {
-				matches = append(matches, r)
-			}
-			continue
-		}
-		if path == r.pattern {
-			matches = append(matches, r)
+// matches reports whether this route's pattern matches path (subtree = prefix,
+// else exact).
+func (r pluginRoute) matches(path string) bool {
+	if r.subtree {
+		return len(path) >= len(r.pattern) && path[:len(r.pattern)] == r.pattern
+	}
+	return path == r.pattern
+}
+
+// longestPluginRoute returns the index into snap of the MOST-SPECIFIC (longest
+// pattern) route matching path, or -1. A single zero-alloc scan — this is the
+// hot path, hit once per request. Specificity (not registration order) decides,
+// so a broad surface like the /rpc builtin ("/rpc/") never shadows a
+// more-specific route ("/rpc/_explorer/") or a catch-all SPA ("/").
+func longestPluginRoute(snap []pluginRoute, path string) int {
+	best := -1
+	for i := range snap {
+		if snap[i].matches(path) && (best < 0 || len(snap[i].pattern) > len(snap[best].pattern)) {
+			best = i
 		}
 	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		return len(matches[i].pattern) > len(matches[j].pattern)
+	return best
+}
+
+// pluginRoutesShorterThan returns the routes matching path whose pattern is
+// SHORTER than maxLen, most-specific first. Only used on the RARE path where the
+// longest match declined (returned nil) and routing must fall through to the
+// next-broadest — so the allocation here is off the common path.
+func pluginRoutesShorterThan(snap []pluginRoute, path string, maxLen int) []pluginRoute {
+	var out []pluginRoute
+	for _, r := range snap {
+		if len(r.pattern) < maxLen && r.matches(path) {
+			out = append(out, r)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return len(out[i].pattern) > len(out[j].pattern)
 	})
-	return matches
+	return out
 }
 
 // callHeaderInjectors fires every registered HeaderInjector on hreq.

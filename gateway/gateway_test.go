@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	. "github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/gwtest"
 
 	"context"
 	"encoding/json"
@@ -169,7 +170,7 @@ func TestGateway_RemoteProxy(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	gw := newGW()
+	gw := gwtest.New()
 	gw.RegisterRemote("Widgets", upstream.URL, time.Minute)
 
 	req := &Request{
@@ -194,7 +195,7 @@ func TestGateway_RemoteProxy(t *testing.T) {
 func TestGateway_PluggableServerInterface(t *testing.T) {
 	// Trivial fake Server proves the interface is sufficient without net/http.
 	fake := &fakeServer{}
-	gw := newGW(WithServer(fake))
+	gw := gwtest.New(WithServer(fake))
 	gw.Register(&EchoRouter{})
 	if fake.h == nil {
 		t.Fatal("Server.Handle was not called")

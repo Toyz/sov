@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -20,7 +21,7 @@ func (p *pingRouter) Ping(_ *rpc.Context) (map[string]bool, error) {
 func TestAudit_RecordsDispatchAndExposesRecent(t *testing.T) {
 	var buf bytes.Buffer
 	plugin := New(Config{Out: &buf})
-	gw := newGW()
+	gw := gwtest.New()
 	gw.Register(&pingRouter{})
 	if err := gw.Use(plugin); err != nil {
 		t.Fatalf("Use: %v", err)

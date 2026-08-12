@@ -11,6 +11,7 @@ import (
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/batchstream"
+	"github.com/Toyz/sov/gateway/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -68,7 +69,7 @@ type bsEchoRouter struct{}
 func (bsEchoRouter) Ping(ctx *rpc.Context) (string, error) { return "pong", nil }
 
 func TestBatchStream_StreamsFramePerEntry(t *testing.T) {
-	gw := newGW()
+	gw := gwtest.New()
 	gw.RegisterAuth(&bsAuthRouter{})
 	gw.Register(&bsEchoRouter{})
 	if err := gw.Use(batchstream.New()); err != nil {

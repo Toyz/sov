@@ -8,6 +8,7 @@ import (
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/requestid"
+	"github.com/Toyz/sov/gateway/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -19,7 +20,7 @@ func (r *EchoRouter) Ping(ctx *rpc.Context) (string, error) {
 }
 
 func TestRequestID_GeneratesWhenMissing(t *testing.T) {
-	gw := newGW()
+	gw := gwtest.New()
 	if err := gw.Use(requestid.New(requestid.Config{})); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestRequestID_GeneratesWhenMissing(t *testing.T) {
 }
 
 func TestRequestID_PropagatesExisting(t *testing.T) {
-	gw := newGW()
+	gw := gwtest.New()
 	if err := gw.Use(requestid.New(requestid.Config{})); err != nil {
 		t.Fatalf("Use: %v", err)
 	}
@@ -63,7 +64,7 @@ func TestRequestID_PropagatesExisting(t *testing.T) {
 }
 
 func TestRequestID_CustomGenerator(t *testing.T) {
-	gw := newGW()
+	gw := gwtest.New()
 	if err := gw.Use(requestid.New(requestid.Config{Generator: func() string { return "fixed-id" }})); err != nil {
 		t.Fatalf("Use: %v", err)
 	}

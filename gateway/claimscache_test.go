@@ -8,6 +8,7 @@ import (
 	"time"
 
 	. "github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/gwtest"
 )
 
 // spyCache is a ClaimsCache that records Get/Put so the test can prove the
@@ -42,7 +43,7 @@ func (s *spyCache) Put(token string, cl *Claims) {
 
 func TestClaimsCache_CustomIsConsulted(t *testing.T) {
 	spy := &spyCache{m: map[string]*Claims{}}
-	gw := newGW(WithClaimsCache(spy))
+	gw := gwtest.New(WithClaimsCache(spy))
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 

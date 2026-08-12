@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	. "github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/gwtest"
 
 	"context"
 	"net/http"
@@ -32,7 +33,7 @@ func (r *SecondAuthRouter) Verify(_ *rpc.Context, p *VerifyParams) (*Claims, err
 }
 
 func TestRegister_AutoDetectsAuthService(t *testing.T) {
-	gw := newGW()
+	gw := gwtest.New()
 	gw.Register(&AutoAuthRouter{})
 	if gw.AuthBindingForTest() == nil || gw.AuthBindingForTest().Service != "AutoAuth" || gw.AuthBindingForTest().Method != "verify" {
 		t.Fatalf("expected auto-bind to AutoAuth/verify, got %+v", gw.AuthBindingForTest())
@@ -50,7 +51,7 @@ func TestRegister_AutoDetectsAuthService(t *testing.T) {
 }
 
 func TestRegister_AutoDetectsAuthzService(t *testing.T) {
-	gw := newGW()
+	gw := gwtest.New()
 	gw.Register(&AutoAuthzRouter{})
 	if gw.AuthzBindingForTest() == nil || gw.AuthzBindingForTest().Service != "AutoAuthz" || gw.AuthzBindingForTest().Method != "check" {
 		t.Fatalf("expected auto-bind to AutoAuthz/check, got %+v", gw.AuthzBindingForTest())
@@ -58,7 +59,7 @@ func TestRegister_AutoDetectsAuthzService(t *testing.T) {
 }
 
 func TestRegister_PanicsOnDualAuthImplementers(t *testing.T) {
-	gw := newGW()
+	gw := gwtest.New()
 	gw.Register(&AutoAuthRouter{})
 
 	defer func() {
@@ -75,7 +76,7 @@ func TestRegister_PanicsOnDualAuthImplementers(t *testing.T) {
 }
 
 func TestRegister_SameAuthRouterTwiceIsIdempotent(t *testing.T) {
-	gw := newGW()
+	gw := gwtest.New()
 	// First call binds via RegisterAuth, second via plain Register —
 	// same router, same wire name. Should NOT panic.
 	defer func() {

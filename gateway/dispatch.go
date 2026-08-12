@@ -59,24 +59,40 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 		}
 		return resp
 	}
-	// Plugin-owned routes via RouteHandler, tried MOST-SPECIFIC first (see
-	// pluginRoutesFor). Framework endpoints (_health, _introspect, _batch,
-	// _register) were already handled above, so a plugin cannot shadow them. A
-	// handler returning nil DECLINES; routing continues to the next-broadest
-	// match. This is how the /rpc surface builtin ("/rpc/") coexists with a
-	// more-specific /rpc/_explorer/ plugin and a catch-all "/" SPA.
-	for _, route := range g.pluginRoutesFor(req.Path) {
-		if resp := route.handler(ctx, req); resp != nil {
-			if resp.Mode == "" {
-				resp.Mode = ModePlugin
-			}
+	// Plugin-owned routes via RouteHandler, tried MOST-SPECIFIC first. Framework
+	// endpoints (_health, _introspect, _batch, _register) were already handled
+	// above, so a plugin cannot shadow them. A handler returning nil DECLINES;
+	// routing then falls through to the next-broadest match. This is how the /rpc
+	// surface builtin ("/rpc/") coexists with a more-specific /rpc/_explorer/
+	// plugin and a catch-all "/" SPA. Common case (a single winning match) is a
+	// zero-alloc single scan; the slice is built only on a decline (rare).
+	g.muPlugins.RLock()
+	snap := g.pluginRoutes
+	g.muPlugins.RUnlock()
+	if best := longestPluginRoute(snap, req.Path); best >= 0 {
+		if resp := runPluginRoute(snap[best], ctx, req); resp != nil {
 			return resp
+		}
+		for _, r := range pluginRoutesShorterThan(snap, req.Path, len(snap[best].pattern)) {
+			if resp := runPluginRoute(r, ctx, req); resp != nil {
+				return resp
+			}
 		}
 	}
 	// No surface claimed it. A gateway with no rpc builtin (gw.Use(rpc.New()))
 	// simply doesn't speak the /rpc surface — the Dispatch fabric still serves
 	// other surfaces (MCP) over the same registered routers.
 	return ErrorResponse(rpc.NotFound("no surface for %q — register a surface plugin (e.g. rpc.New())", req.Path))
+}
+
+// runPluginRoute invokes a plugin route's handler, stamping ModePlugin when the
+// handler left Mode unset. Returns nil when the handler DECLINES.
+func runPluginRoute(r pluginRoute, ctx context.Context, req *Request) *Response {
+	resp := r.handler(ctx, req)
+	if resp != nil && resp.Mode == "" {
+		resp.Mode = ModePlugin
+	}
+	return resp
 }
 
 // errCodeFromBody peeks at a response body looking for {"error":{"code":...}}.
