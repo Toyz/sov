@@ -75,4 +75,13 @@ type RouterDescriptor struct {
 	Router  string             `json:"router"` // wire name (URL segment)
 	Title   string             `json:"title"`  // group label for explorers
 	Methods []MethodDescriptor `json:"methods"`
+	// Surfaces names the non-/rpc surfaces that expose this router — e.g.
+	// "mcp" when a surface builtin advertises it as an MCP tool source. The
+	// engine NEVER sets this (it is surface-agnostic): a surface builtin stamps
+	// its own name via an IntrospectContributor, and because the tag lives on
+	// the descriptor it FEDERATES — a downstream aggregator that merges a
+	// remote node's catalog carries the remote's surface tags, so a surface can
+	// discover the services it should expose across the whole mesh, not just
+	// the local engine. Empty for a plain /rpc-only router.
+	Surfaces []string `json:"surfaces,omitempty"`
 }

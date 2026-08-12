@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/rpc"
@@ -41,38 +42,41 @@ type toolEntry struct {
 	schema      map[string]any
 }
 
-// toolEntries resolves every tool-router method into an MCP tool. Discovery is
-// by CAPABILITY: eng.Find(rpc.Implements[ToolRouter]()) returns the routers that
-// embed mcp.Tool; their methods (minus hidden ones) become tools, with name,
-// schema, perm, and description reflected from the same engine metadata as /rpc.
-// This is the single source of truth for both listing and calling.
-func (p *Plugin) toolEntries() []toolEntry {
-	eng := p.gw.Engine()
-	want := map[string]bool{}
-	for _, ri := range eng.Find(rpc.Implements[ToolRouter]()) {
-		want[ri.Name] = true
-	}
-	if len(want) == 0 {
+// toolEntries resolves every tool method into an MCP tool from the FEDERATED
+// introspect catalog — so tools include services on remote nodes, not just the
+// local engine. A service is a tool source when its descriptor carries the "mcp"
+// surface tag (stamped by each node's ContributeIntrospect; see federate.go),
+// which federates on the RouterDescriptor. The public catalog already strips
+// hard-hidden and omits soft-internal methods, so what remains is the tool
+// surface. Name, schema, perm, and description are reflected from the same
+// descriptor that drives /rpc. Single source of truth for listing AND calling,
+// so a tool always resolves back to the exact (service, method) it names —
+// local or across the mesh.
+func (p *Plugin) toolEntries(ctx context.Context) []toolEntry {
+	report := p.catalog(ctx)
+	if report == nil {
 		return nil
 	}
+	names := make([]string, 0, len(report.Services))
+	for name := range report.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names) // stable tool order across a map
 	var out []toolEntry
-	for _, rd := range eng.Describe() {
-		if !want[rd.Router] {
-			continue
-		}
-		for _, md := range rd.Methods {
-			// Hidden methods are not tools. Hide a method (HiddenMethods /
-			// HardHiddenMethods) to keep it callable but off the tool surface.
-			if md.HardHidden || md.Internal {
+	for _, name := range names {
+		for _, rd := range report.Services[name] {
+			if !hasSurface(rd, surfaceName) {
 				continue
 			}
-			out = append(out, toolEntry{
-				name:        toolName(rd.Router, md.Method),
-				router:      rd.Router,
-				method:      md.Method,
-				description: toolDescription(rd, md),
-				schema:      inputSchema(md),
-			})
+			for _, md := range rd.Methods {
+				out = append(out, toolEntry{
+					name:        toolName(rd.Router, md.Method),
+					router:      rd.Router,
+					method:      md.Method,
+					description: toolDescription(rd, md),
+					schema:      inputSchema(md),
+				})
+			}
 		}
 	}
 	return out
@@ -83,8 +87,8 @@ func (p *Plugin) toolEntries() []toolEntry {
 func toolName(router, method string) string { return router + "." + method }
 
 // listTools renders the tool index for tools/list.
-func (p *Plugin) listTools() []map[string]any {
-	entries := p.toolEntries()
+func (p *Plugin) listTools(ctx context.Context) []map[string]any {
+	entries := p.toolEntries(ctx)
 	tools := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		tools = append(tools, map[string]any{
@@ -168,7 +172,7 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 		return nil, &jsonRPCError{code: -32602, msg: "invalid params"}
 	}
 	var router, method string
-	for _, e := range p.toolEntries() {
+	for _, e := range p.toolEntries(ctx) {
 		if e.name == tc.Name {
 			router, method = e.router, e.method
 			break

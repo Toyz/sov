@@ -117,7 +117,7 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 			"serverInfo":      map[string]any{"name": p.name, "version": p.version},
 		}))
 	case "tools/list":
-		return jsonRPC(http.StatusOK, okBody(rq.ID, map[string]any{"tools": p.listTools()}))
+		return jsonRPC(http.StatusOK, okBody(rq.ID, map[string]any{"tools": p.listTools(ctx)}))
 	case "tools/call":
 		res, jerr := p.callTool(ctx, req, rq.Params)
 		if jerr != nil {

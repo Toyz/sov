@@ -42,10 +42,10 @@ The marker method on `mcp.Tool` is **unexported**, which does two jobs:
    is to embed `mcp.Tool`, so "is this a tool router" is a real type check, not
    a string suffix.
 
-## Discovery — the registry filter engine
+## Discovery — federated, via the registry filter engine
 
-The plugin finds tool routers through the engine's composable filter DSL, not a
-hard-wired list or a name convention:
+Each node tags its **local** tool routers in the introspect catalog through an
+`IntrospectContributor` — it finds them with the engine's composable filter DSL:
 
 ```go
 for _, ri := range engine.Find(rpc.Implements[mcp.ToolRouter]()) {
@@ -55,8 +55,15 @@ for _, ri := range engine.Find(rpc.Implements[mcp.ToolRouter]()) {
 
 The filter DSL — `Find` with `Implements[T]()`, `ByName`, `ByTypeName`, and the
 `And`/`Or`/`Not` combinators (plus the raw `Select(pred)` escape hatch) — lets
-any surface builtin query the registry by capability, name, or type. MCP is just
-the first consumer.
+any surface builtin query the registry by capability, name, or type.
+
+The tag lands on `rpc.RouterDescriptor.Surfaces` (`"mcp"`), which **federates**:
+because it lives on the descriptor, a parent gateway that aggregates a node's
+`/rpc/_introspect` inherits its surface tags. So `tools/list` is built from the
+**federated** catalog (`IntrospectBody`), not just the local engine — node A
+lists tools whose services actually run on node B, even though the `mcp.Tool`
+marker (a local Go type) never crosses the wire. `tools/call` then routes to B
+through the mesh `Dispatch` fabric. Meshed MCP with no MCP-specific mesh code.
 
 ## Auth / authz / mesh
 
