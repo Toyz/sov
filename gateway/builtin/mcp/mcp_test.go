@@ -221,3 +221,34 @@ func TestMCP_ToolsCallRidesAuth(t *testing.T) {
 		t.Fatalf("anonymous tools/call should be isError=true: %v", ares)
 	}
 }
+
+// An MCP-only node: the /rpc surface is OFF (WithoutRPCSurface), so /rpc 404s,
+// but the SAME registered router still serves as an MCP tool — MCP routes
+// through the Dispatch fabric, which is independent of the /rpc surface. This is
+// "rpc is just a surface" made concrete.
+func TestMCP_RPCSurfaceDisabled_MCPStillServes(t *testing.T) {
+	gw := gateway.New(gateway.WithoutRPCSurface())
+	gw.Register(&NoteToolsRouter{})
+	gw.MustUse(mcp.New(mcp.Config{}))
+
+	// /rpc surface is off.
+	resp := gw.Handle(context.Background(), &gateway.Request{
+		Method: http.MethodPost, Path: "/rpc/NoteTools/read", Header: gateway.Header{}, Body: []byte(`{"args":[{"id":"1"}]}`),
+	})
+	if resp.Status != http.StatusNotFound {
+		t.Fatalf("/rpc should 404 on an MCP-only node, got %d: %s", resp.Status, resp.Body)
+	}
+
+	// MCP still lists AND calls the tool, via the fabric.
+	names := toolNames(mcpPost(t, gw, "", "tools/list", map[string]any{}))
+	if !names["NoteTools.read"] {
+		t.Fatalf("MCP tool missing on rpc-disabled node: %v", names)
+	}
+	call := mcpPost(t, gw, "", "tools/call", map[string]any{"name": "NoteTools.read", "arguments": map[string]any{"id": "1"}})
+	res, _ := call["result"].(map[string]any)
+	content, _ := res["content"].([]any)
+	first, _ := content[0].(map[string]any)
+	if !strings.Contains(first["text"].(string), "note:1") {
+		t.Fatalf("MCP tool call failed on rpc-disabled node: %v", res)
+	}
+}

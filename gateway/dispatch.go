@@ -73,7 +73,16 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 			return resp
 		}
 	}
-	return g.routeBusiness(ctx, req)
+	// The RPC surface is a replaceable seam (default routeBusiness; 404 when
+	// disabled for an MCP-only node; a custom Handler via WithRPCSurface).
+	return g.rpcSurface(ctx, req)
+}
+
+// rpcDisabled is the RPC surface installed by WithoutRPCSurface: business /rpc
+// calls 404, while the Dispatch mesh fabric keeps serving other surfaces that
+// route through it (e.g. MCP tools over the same registered routers).
+func (g *Gateway) rpcDisabled(_ context.Context, _ *Request) *Response {
+	return ErrorResponse(rpc.NotFound("no rpc surface on this node"))
 }
 
 // errCodeFromBody peeks at a response body looking for {"error":{"code":...}}.
