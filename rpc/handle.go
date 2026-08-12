@@ -40,20 +40,20 @@ func Handle[P any, R any](e *Engine, router, method string, fn func(ctx *Context
 		entry.fieldMap = fm
 	}
 	entry.invoke = func(ctx *Context, body []byte) (int, []byte) {
-		codec := e.activeCodec()
+		codec := e.codecForContext(ctx)
 		var p P
 		if hasParams {
 			if derr := codec.DecodeParams(body, &p, fm); derr != nil {
-				return e.encodeError(asRPCError(derr, BadRequest("%v", derr)))
+				return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
 			}
 		}
 		r, err := fn(ctx, &p)
 		if err != nil {
-			return e.encodeError(asRPCError(err, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
+			return encodeErrorWith(codec, asRPCError(err, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
 		}
 		out, mErr := codec.EncodeResult(r)
 		if mErr != nil {
-			return e.encodeError(Internal("encode result: %v", mErr))
+			return encodeErrorWith(codec, Internal("encode result: %v", mErr))
 		}
 		return 200, out
 	}
@@ -75,19 +75,19 @@ func HandleErr[P any](e *Engine, router, method string, fn func(ctx *Context, p 
 		entry.fieldMap = fm
 	}
 	entry.invoke = func(ctx *Context, body []byte) (int, []byte) {
-		codec := e.activeCodec()
+		codec := e.codecForContext(ctx)
 		var p P
 		if hasParams {
 			if derr := codec.DecodeParams(body, &p, fm); derr != nil {
-				return e.encodeError(asRPCError(derr, BadRequest("%v", derr)))
+				return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
 			}
 		}
 		if err := fn(ctx, &p); err != nil {
-			return e.encodeError(asRPCError(err, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
+			return encodeErrorWith(codec, asRPCError(err, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
 		}
 		out, mErr := codec.EncodeResult(nil)
 		if mErr != nil {
-			return e.encodeError(Internal("encode result: %v", mErr))
+			return encodeErrorWith(codec, Internal("encode result: %v", mErr))
 		}
 		return 200, out
 	}

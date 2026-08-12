@@ -3,7 +3,7 @@ package rpc
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
@@ -11,14 +11,16 @@ import (
 	"unicode"
 )
 
-// Warnf is the sink for non-fatal boot warnings the engine emits — e.g.
-// an exported RPC-shaped method skipped because its name collides with a
-// reserved framework marker (HELL-281). Silently dropping a valid-looking
-// handler is a trap that only surfaces as a 404 over the real transport,
-// so the engine speaks up at Register instead. Defaults to stderr via the
-// stdlib logger; set it to a no-op to silence, or to your own logger to
-// redirect. Not a hot path — called only at Register.
-var Warnf = func(format string, args ...any) { log.Printf("[sov] "+format, args...) }
+// Logger is the minimal structured-log sink the engine writes non-fatal
+// boot warnings to (e.g. an exported RPC-shaped method dropped because its
+// name collides with a reserved framework marker — HELL-281). Its Warn
+// shape matches sov's gateway.Logger, so the gateway injects its own logger
+// via SetLogger and engine warnings share the app's structured logger
+// instead of the stdlib log package. When none is injected the engine falls
+// back to slog.Default(). Not a hot path — called only at Register.
+type Logger interface {
+	Warn(msg string, args ...any)
+}
 
 // Engine holds the registered routers and dispatches incoming requests
 // to the right Go method by reflection. Safe for concurrent dispatch.
@@ -31,13 +33,40 @@ type Engine struct {
 	hardHiddenList map[string][]string         // router → HARD-hidden wire names declared via HardHiddenMethods()
 	authorizers    map[string]MethodAuthorizer // router → in-process resource-scoped authz hook (HELL-283)
 	routerOrder    []string
-	// codec encodes/decodes BUSINESS method params + results (HELL-286).
-	// Defaults to the JSON wire; SetCodec installs another at boot. Read on
-	// the dispatch hot path; set once before serving.
-	codec Codec
+	// codecs is the per-name registry of BUSINESS-body codecs (HELL-286),
+	// keyed by Codec.Name(); a request selects one by Content-Type.
+	// defaultCodec is used when a request selects none — the JSON PEMM wire.
+	// Read on the dispatch hot path; mutated only at boot.
+	codecs       map[string]Codec
+	defaultCodec Codec
+	// logger sinks non-fatal boot warnings; nil falls back to slog.Default().
+	logger Logger
 }
 
-// NewEngine returns an empty Engine using the default JSON codec.
+// SetLogger injects the structured logger the engine writes boot warnings
+// to (HELL-281). The gateway wires its own Logger here so engine warnings
+// share the app's logger; call at boot, before Register.
+func (e *Engine) SetLogger(l Logger) {
+	e.mu.Lock()
+	e.logger = l
+	e.mu.Unlock()
+}
+
+// warn emits a boot warning through the injected logger, or slog.Default()
+// when none is set. Structured key/value args, never a fmt string.
+func (e *Engine) warn(msg string, args ...any) {
+	e.mu.RLock()
+	l := e.logger
+	e.mu.RUnlock()
+	if l != nil {
+		l.Warn(msg, args...)
+		return
+	}
+	slog.Default().Warn(msg, args...)
+}
+
+// NewEngine returns an empty Engine with the JSON codec registered as the
+// default.
 func NewEngine() *Engine {
 	return &Engine{
 		routers:        map[string]map[string]*methodEntry{},
@@ -45,36 +74,79 @@ func NewEngine() *Engine {
 		hiddenList:     map[string][]string{},
 		hardHiddenList: map[string][]string{},
 		authorizers:    map[string]MethodAuthorizer{},
-		codec:          jsonCodec{},
+		codecs:         map[string]Codec{jsonName: jsonCodec{}},
+		defaultCodec:   jsonCodec{},
 	}
 }
 
-// SetCodec installs the codec used for BUSINESS method params/results
-// (HELL-286). Call at boot, before dispatch — the JSON default is the
-// cross-language PEMM wire, so a non-JSON codec is a per-deployment,
-// homogeneous-only choice. Framework envelopes stay JSON regardless.
+// RegisterCodec adds a codec to the registry under its Name() so a request
+// can select it (e.g. by Content-Type). Call at boot. It does NOT change
+// the default — use SetCodec for that. The JSON default remains the
+// cross-language PEMM wire; a non-JSON codec is a per-deployment choice a
+// caller opts into per request.
+func (e *Engine) RegisterCodec(c Codec) {
+	if c == nil {
+		return
+	}
+	e.mu.Lock()
+	e.codecs[c.Name()] = c
+	e.mu.Unlock()
+}
+
+// SetCodec sets the DEFAULT codec (and registers it). Back-compat with the
+// single-codec API — a request that selects no codec uses this one. Passing
+// nil restores the JSON default.
 func (e *Engine) SetCodec(c Codec) {
 	if c == nil {
 		c = jsonCodec{}
 	}
 	e.mu.Lock()
-	e.codec = c
+	e.codecs[c.Name()] = c
+	e.defaultCodec = c
 	e.mu.Unlock()
 }
 
-// activeCodec returns the installed codec, or the JSON default if an Engine
-// was constructed without NewEngine (defensive — the zero Engine has none).
-func (e *Engine) activeCodec() Codec {
-	if e.codec == nil {
-		return jsonCodec{}
+// ResolveCodec returns the registered codec named name, or the default when
+// name is unknown or empty. This is the negotiation lookup the transport
+// adapter calls after mapping Content-Type to a codec name.
+func (e *Engine) ResolveCodec(name string) Codec {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if c, ok := e.codecs[name]; ok {
+		return c
 	}
-	return e.codec
+	if e.defaultCodec != nil {
+		return e.defaultCodec
+	}
+	return jsonCodec{}
 }
 
-// encodeError renders rerr through the active codec, falling back to JSON if
-// the codec itself fails to encode (so an error is never swallowed).
-func (e *Engine) encodeError(rerr *Error) (int, []byte) {
-	body, err := e.activeCodec().EncodeError(rerr)
+// activeCodec returns the engine's default codec, used when a request
+// carries no per-request selection.
+func (e *Engine) activeCodec() Codec {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.defaultCodec == nil {
+		return jsonCodec{}
+	}
+	return e.defaultCodec
+}
+
+// codecForContext prefers a per-request codec the adapter selected onto ctx
+// (Content-Type negotiation), falling back to the engine default.
+func (e *Engine) codecForContext(ctx *Context) Codec {
+	if ctx != nil {
+		if c := ctx.selectedCodec(); c != nil {
+			return c
+		}
+	}
+	return e.activeCodec()
+}
+
+// encodeErrorWith renders rerr through codec, falling back to JSON if the
+// codec itself fails to encode (so an error is never swallowed).
+func encodeErrorWith(codec Codec, rerr *Error) (int, []byte) {
+	body, err := codec.EncodeError(rerr)
 	if err != nil {
 		return rerr.Status, MarshalError(rerr)
 	}
@@ -318,8 +390,8 @@ func (e *Engine) Register(router any) {
 		}
 		if reservedMarkerMethods[m.Name] {
 			if looksLikeStrayRPCMethod(m) {
-				Warnf("rpc.Register: %s.%s is shaped like an RPC method but %q is a reserved framework marker — it is NOT exposed over RPC (calls 404). Rename the method to expose it.",
-					typeName, m.Name, m.Name)
+				e.warn("rpc.Register: exported method is shaped like an RPC handler but its name is a reserved framework marker; it is NOT exposed over RPC (calls 404) — rename it to expose the method",
+					"router", typeName, "method", m.Name)
 			}
 			continue
 		}

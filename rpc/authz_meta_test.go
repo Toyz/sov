@@ -172,21 +172,27 @@ type StrayRouter struct{}
 func (r *StrayRouter) Apply(ctx *Context) error { return nil } // reserved marker collision
 func (r *StrayRouter) Live(ctx *Context) error  { return nil } // a real exposed method
 
-func TestRegister_WarnsOnStrayReservedMarker(t *testing.T) {
-	orig := Warnf
-	var msgs []string
-	Warnf = func(format string, args ...any) { msgs = append(msgs, fmt.Sprintf(format, args...)) }
-	defer func() { Warnf = orig }()
+// captureLogger records Warn calls so the stray-marker test can assert the
+// engine warned through its injected structured logger (not stdlib log).
+type captureLogger struct{ warns []string }
 
-	NewEngine().Register(&StrayRouter{})
+func (c *captureLogger) Warn(msg string, args ...any) {
+	c.warns = append(c.warns, msg+" "+fmt.Sprint(args...))
+}
+
+func TestRegister_WarnsOnStrayReservedMarker(t *testing.T) {
+	cap := &captureLogger{}
+	e := NewEngine()
+	e.SetLogger(cap)
+	e.Register(&StrayRouter{})
 
 	var hit bool
-	for _, m := range msgs {
+	for _, m := range cap.warns {
 		if strings.Contains(m, "Apply") && strings.Contains(m, "reserved") {
 			hit = true
 		}
 	}
 	if !hit {
-		t.Fatalf("expected a stray-marker warning naming Apply, got %v", msgs)
+		t.Fatalf("expected a stray-marker warning naming Apply, got %v", cap.warns)
 	}
 }

@@ -21,6 +21,28 @@ type Context struct {
 	context.Context
 	User  any
 	State map[string]any
+	// codec is the per-request body codec the transport adapter selected
+	// via Content-Type negotiation (HELL-286). nil means "use the engine
+	// default" — the JSON PEMM wire. Set through SelectCodec; read by the
+	// engine on dispatch.
+	codec Codec
+}
+
+// SelectCodec pins the codec the engine uses for this request's params and
+// result. The transport adapter calls it after resolving Content-Type;
+// handlers normally never touch it. A nil codec leaves the engine default.
+func (c *Context) SelectCodec(codec Codec) {
+	if c != nil {
+		c.codec = codec
+	}
+}
+
+// selectedCodec returns the per-request codec, or nil when none was pinned.
+func (c *Context) selectedCodec() Codec {
+	if c == nil {
+		return nil
+	}
+	return c.codec
 }
 
 // NewContext returns a Context wrapping ctx. State is created lazily on the

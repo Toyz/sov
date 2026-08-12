@@ -19,6 +19,14 @@ func (g *Gateway) Log() Logger {
 	return defaultLogger{l: slog.Default()}
 }
 
+// engineLogger adapts the gateway's structured logger to rpc.Logger so the
+// rpc.Engine's boot warnings (HELL-281) flow through sov's logger, not the
+// stdlib log package. g.Log() is resolved at warn-time so a Logger plugin
+// registered after construction is still honored.
+type engineLogger struct{ g *Gateway }
+
+func (e engineLogger) Warn(msg string, args ...any) { e.g.Log().Warn(msg, args...) }
+
 // defaultLogger adapts slog.Default() to the Logger interface so
 // gw.Log() is non-nil before any Logger plugin is wired.
 type defaultLogger struct{ l *slog.Logger }

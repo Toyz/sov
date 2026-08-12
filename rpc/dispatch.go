@@ -14,19 +14,20 @@ import (
 // `{"args":{...}}`. An empty body is treated as no-args so methods that
 // take no params can be invoked with no body.
 func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (status int, respBody []byte) {
+	codec := e.codecForContext(ctx)
 	entry, ok := e.Lookup(router, method)
 	if !ok {
 		if !e.HasRouter(router) {
-			return e.encodeError(NotFound("router %q not found", router))
+			return encodeErrorWith(codec, NotFound("router %q not found", router))
 		}
 		// Wire method names are lowerFirst(GoName) (List → list). A caller
 		// sending the Go casing gets a bare "not found" that reads like a
 		// missing method — hint the correct wire name instead of making
 		// them re-derive the casing rule. See HELL-282.
 		if suggestion := e.suggestMethod(router, method); suggestion != "" {
-			return e.encodeError(NotFound("method %q not found on router %q; did you mean %q?", method, router, suggestion))
+			return encodeErrorWith(codec, NotFound("method %q not found on router %q; did you mean %q?", method, router, suggestion))
 		}
-		return e.encodeError(NotFound("method %q not found on router %q", method, router))
+		return encodeErrorWith(codec, NotFound("method %q not found on router %q", method, router))
 	}
 
 	// Typed fast path (rpc.Handle): a closure built at boot calls the
@@ -35,13 +36,12 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 		return entry.invoke(ctx, body)
 	}
 
-	codec := e.activeCodec()
 	args := []reflect.Value{entry.router, reflect.ValueOf(ctx)}
 	var paramPtr any
 	if entry.hasParams {
 		ptr := reflect.New(entry.paramType)
 		if derr := codec.DecodeParams(body, ptr.Interface(), entry.fieldMap); derr != nil {
-			return e.encodeError(asRPCError(derr, BadRequest("%v", derr)))
+			return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
 		}
 		args = append(args, ptr)
 		paramPtr = ptr.Interface()
@@ -52,7 +52,7 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 	// before the handler runs. Deny surfaces verbatim; the handler is skipped.
 	if ma := e.authorizerFor(router); ma != nil {
 		if err := ma.AuthorizeMethod(ctx, method, paramPtr); err != nil {
-			return e.encodeError(asRPCError(err, Internal("authorization failed")))
+			return encodeErrorWith(codec, asRPCError(err, Internal("authorization failed")))
 		}
 	}
 
@@ -61,7 +61,7 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 	errVal := results[len(results)-1]
 	if !errVal.IsNil() {
 		callErr := errVal.Interface().(error)
-		return e.encodeError(asRPCError(callErr, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
+		return encodeErrorWith(codec, asRPCError(callErr, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
 	}
 
 	var data any
@@ -70,7 +70,7 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 	}
 	body2, mErr := codec.EncodeResult(data)
 	if mErr != nil {
-		return e.encodeError(Internal("encode result: %v", mErr))
+		return encodeErrorWith(codec, Internal("encode result: %v", mErr))
 	}
 	return 200, body2
 }

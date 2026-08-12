@@ -189,6 +189,11 @@ func New(opts ...Option) *Gateway {
 		middlewares:   append([]Middleware{}, o.Middleware...),
 	}
 	g.defaultRecovery = &defaultRecoveryHandler{gw: g}
+	// Route rpc.Engine boot warnings (HELL-281) through the gateway's
+	// structured logger instead of the stdlib log package. Resolved
+	// dynamically at warn-time, so a Logger plugin registered later is
+	// honored.
+	eng.SetLogger(engineLogger{g: g})
 	g.register.onChange = g.invalidateCatalog
 	if o.AdvertiseURL != "" {
 		canon, err := NormalizeUpstreamURL(o.AdvertiseURL)
