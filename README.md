@@ -14,6 +14,7 @@ gateway, or as a hybrid that does both at once.
 This README is the read-me-first. Going deeper:
 
 - [DESIGN.md](DESIGN.md) — the model: wire shape, plugin hooks, federation, auth-split.
+- [docs/SURFACES.md](docs/SURFACES.md) — surfaces over the mesh fabric: how `/rpc` and MCP both ride `Dispatch`, the registry filter engine, and how a surface (MCP) meshes across nodes. Serve the same struct over RPC + MCP.
 - [docs/PEMM.md](docs/PEMM.md) — what "Protocol-Enforced Modular Monolith" means and why it's distinct (enforcement axis, fused boundary).
 - [docs/WIRE_CONTRACT.md](docs/WIRE_CONTRACT.md) — the exact, language-agnostic contract a pod implements (register, signing, seal, RPC, introspect, health).
 - [examples/chirp/polyglot/](examples/chirp/polyglot/) — a non-Go (Python) pod that joins the mesh as a first-class member. Producer polyglot, proven.

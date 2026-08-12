@@ -375,6 +375,21 @@ supposed to be `Auth`).
 
 ---
 
+## Surfaces over the mesh
+
+`/rpc` is one **surface** onto your routers; MCP is another. Surfaces are
+decoupled from routing: the mesh fabric (`g.Dispatch(req)`) decides local vs
+peer vs remote, and a surface only translates its wire into a `Request` and
+hands it off — so a surface meshes with no surface-specific code. The `/rpc`
+surface is itself a replaceable seam (`WithoutRPCSurface` / `WithRPCSurface`),
+so a node can serve only MCP. A surface finds the routers it serves through the
+registry filter engine (`eng.Find(rpc.Implements[T]())`), and discovers routers
+on *other* nodes through a federated `RouterDescriptor.Surfaces` tag that rides
+the introspect catalog. Full model + worked 2-node example (RPC + MCP over one
+codebase): [docs/SURFACES.md](docs/SURFACES.md).
+
+---
+
 ## Cascading batch — `/rpc/_batch`
 
 One POST with N method calls fans out concurrently. The gateway resolves
