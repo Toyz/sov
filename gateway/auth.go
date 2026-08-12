@@ -403,13 +403,11 @@ func (g *Gateway) authzMiddleware() Middleware {
 			if !ok {
 				return next(ctx, req)
 			}
-			// Resolve the method's DECLARED authz requirement (HELL-280)
-			// from the local engine and hand it to Check alongside the
-			// caller's headers (HELL-278). Remote methods aren't in the
-			// local engine → perm is "" here and enforced at their home
-			// gateway; the AuthzService treats "" as its own default.
-			perm := g.engine.Perm(router, method)
-			if err := g.checkAuthz(ctx, claims, router, method, perm, req.Header); err != nil {
+			// Same gate Authorize applies (it resolves the method's declared
+			// perm and calls the AuthzService) — call it, so /rpc and any surface
+			// that reaches Authorize outside this middleware (MCP) share ONE
+			// implementation and can't drift.
+			if err := g.Authorize(ctx, claims, router, method, req.Header); err != nil {
 				return ErrorResponseFromAny(err)
 			}
 			return next(ctx, req)

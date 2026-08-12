@@ -47,10 +47,19 @@ func (g *Gateway) TagSurface(report *IntrospectReport, surfaceName string, pred 
 func (g *Gateway) FederatedCatalog(ctx context.Context) *IntrospectReport {
 	resp := g.IntrospectBody(ctx, &Request{Header: Header{}})
 	if resp == nil || resp.Status != 200 {
+		status := 0
+		if resp != nil {
+			status = resp.Status
+		}
+		// A surface treats nil as "no routers", so a federation/aggregator outage
+		// would otherwise look identical to an empty catalog — log so it's
+		// diagnosable.
+		g.Log().Warn("gateway: federated catalog unavailable", "status", status)
 		return nil
 	}
 	var rep IntrospectReport
 	if err := json.Unmarshal(resp.Body, &rep); err != nil {
+		g.Log().Warn("gateway: federated catalog decode failed", "err", err)
 		return nil
 	}
 	return &rep

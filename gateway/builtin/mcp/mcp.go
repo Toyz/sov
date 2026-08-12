@@ -61,7 +61,14 @@ var (
 // New returns the MCP plugin.
 //
 //	gw.Use(mcp.New(mcp.Config{}))
-func New(c Config) *Plugin {
+func New(cfg ...Config) *Plugin {
+	if len(cfg) > 1 {
+		panic("mcp.New: at most one Config")
+	}
+	var c Config
+	if len(cfg) == 1 {
+		c = cfg[0]
+	}
 	p := &Plugin{path: c.Path, name: c.ServerName, version: c.Version}
 	if p.path == "" {
 		p.path = defaultPath

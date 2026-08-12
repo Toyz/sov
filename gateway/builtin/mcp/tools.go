@@ -69,6 +69,12 @@ func (p *Plugin) toolEntries(ctx context.Context) []toolEntry {
 				continue
 			}
 			for _, md := range rd.Methods {
+				// Methods whose wire name starts with "_" are internal-network
+				// only — the /rpc surface 404s them, so MCP (also an external
+				// surface) must not expose or dispatch them either.
+				if len(md.Method) > 0 && md.Method[0] == '_' {
+					continue
+				}
 				out = append(out, toolEntry{
 					name:        toolName(rd.Router, md.Method),
 					router:      rd.Router,

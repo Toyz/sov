@@ -72,16 +72,19 @@ func (e *Engine) routerInfoLocked(name string) (RouterInfo, bool) {
 	return RouterInfo{Name: name, TypeName: rt.Name(), Value: rv.Interface()}, true
 }
 
-// receiverLocked recovers the registered receiver value for a router. Every
-// methodEntry carries the same receiver, so any one of them serves. Caller
-// holds e.mu (read).
+// receiverLocked recovers the registered receiver value for a router. A router
+// registered reflectively (Engine.Register) carries the same receiver on every
+// methodEntry, but a router registered purely via rpc.Handle has typed closures
+// with NO receiver struct (me.router is the zero Value). Skip those and return
+// the first VALID receiver; if none exists — a Handle-only router — return
+// ok=false, so Select/Find/RouterValue exclude it (there is no instance to
+// type-assert a marker interface against) instead of panicking on a zero Value.
+// Caller holds e.mu (read).
 func (e *Engine) receiverLocked(name string) (reflect.Value, bool) {
-	methods, ok := e.routers[name]
-	if !ok || len(methods) == 0 {
-		return reflect.Value{}, false
-	}
-	for _, me := range methods {
-		return me.router, true
+	for _, me := range e.routers[name] {
+		if me.router.IsValid() {
+			return me.router, true
+		}
 	}
 	return reflect.Value{}, false
 }

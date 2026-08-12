@@ -57,6 +57,32 @@ func TestRegister_NoRouterSuffixAllowed(t *testing.T) {
 	}
 }
 
+type hoParams struct {
+	X string `json:"x"`
+}
+
+// A router registered purely via rpc.Handle has typed closures with NO receiver
+// struct. Select/Find/RouterValue must exclude it (nothing to type-assert a
+// capability against), not panic on the zero reflect.Value.
+func TestSelect_HandleOnlyRouterExcludedNoPanic(t *testing.T) {
+	e := rpc.NewEngine()
+	rpc.Handle(e, "HandleOnly", "ping", func(_ *rpc.Context, _ *hoParams) (string, error) { return "ok", nil })
+	e.Register(&AlphaRouter{})
+
+	all := e.Select(func(rpc.RouterInfo) bool { return true }) // must not panic
+	for _, ri := range all {
+		if ri.Name == "HandleOnly" {
+			t.Fatalf("Handle-only router should be excluded from Select: %+v", all)
+		}
+	}
+	if _, ok := e.RouterValue("HandleOnly"); ok {
+		t.Fatal("RouterValue(HandleOnly) should be false — no receiver")
+	}
+	if got := e.Find(rpc.Implements[marker]()); len(got) != 1 || got[0].Name != "Alpha" {
+		t.Fatalf("Alpha still findable, HandleOnly not: %+v", got)
+	}
+}
+
 func TestSelect_NilPredicateMatchesNothing(t *testing.T) {
 	e := rpc.NewEngine()
 	e.Register(&AlphaRouter{})

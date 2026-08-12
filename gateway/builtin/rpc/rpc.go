@@ -72,8 +72,11 @@ const surfaceName = "rpc"
 //	gw.Use(rpc.New())                              // serve all registered routers
 //	gw.Use(rpc.New(rpc.Config{RequireMarker: true})) // serve only rpc.Served routers
 func New(cfg ...Config) *Plugin {
+	if len(cfg) > 1 {
+		panic("rpc.New: at most one Config")
+	}
 	var c Config
-	if len(cfg) > 0 {
+	if len(cfg) == 1 {
 		c = cfg[0]
 	}
 	return &Plugin{cfg: c}

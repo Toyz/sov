@@ -222,6 +222,29 @@ func TestMCP_ToolsCallRidesAuth(t *testing.T) {
 	}
 }
 
+// An "_"-prefixed method is internal-network only — the /rpc surface 404s it, so
+// MCP (also external) must not list or dispatch it. Here a mcp.Tool router gains
+// a "_internal" wire method via rpc.Handle; it must not become a tool.
+func TestMCP_InternalMethodNotTool(t *testing.T) {
+	gw := gateway.New()
+	gw.Register(&MixedToolsRouter{})
+	rpc.HandleErr(gw.Engine(), "MixedTools", "_internal", func(_ *rpc.Context, _ *readParams) error { return nil })
+	gw.MustUse(mcp.New())
+
+	names := toolNames(mcpPost(t, gw, "", "tools/list", map[string]any{}))
+	if names["MixedTools._internal"] {
+		t.Fatalf("_-prefixed method leaked as a tool: %v", names)
+	}
+	if !names["MixedTools.open"] {
+		t.Fatalf("normal method should still be a tool: %v", names)
+	}
+	// tools/call on the internal method resolves to no tool.
+	call := mcpPost(t, gw, "", "tools/call", map[string]any{"name": "MixedTools._internal", "arguments": map[string]any{}})
+	if _, ok := call["error"]; !ok {
+		t.Fatalf("tools/call on _internal should be an unknown-tool error: %v", call)
+	}
+}
+
 // An MCP-only node: it never registers the rpc builtin, so /rpc 404s, but the
 // SAME registered router still serves as an MCP tool — MCP routes through the
 // Dispatch fabric, which is independent of the /rpc surface. "rpc is just a

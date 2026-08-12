@@ -18,9 +18,10 @@ import (
 // Order of operations:
 //  1. Framework endpoints (/rpc/_health, /rpc/_introspect, /rpc/_batch,
 //     /rpc/_register) — dispatched against gateway-owned handlers.
-//  2. Path validation — must be /rpc/{router}/{method}, POST only.
-//  3. Reject service-level _X (refused at gateway by design).
-//  4. Resolve the router and dispatch local or remote.
+//  2. Plugin RouteHandlers, most-specific first (handleInner). Surface builtins
+//     live here: the rpc builtin owns /rpc/{router}/{method} and enforces its
+//     own POST-only + reserved-`_`-name policy before handing off to Dispatch;
+//     mcp owns /mcp. A gateway with no surface registered 404s business paths.
 func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 	// Plugin hook: HeaderParser runs on every inbound request before
 	// any routing decision. A parser may short-circuit by returning an
@@ -73,7 +74,7 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 		if resp := runPluginRoute(snap[best], ctx, req); resp != nil {
 			return resp
 		}
-		for _, r := range pluginRoutesShorterThan(snap, req.Path, len(snap[best].pattern)) {
+		for _, r := range pluginRoutesExcept(snap, req.Path, best) {
 			if resp := runPluginRoute(r, ctx, req); resp != nil {
 				return resp
 			}

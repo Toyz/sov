@@ -65,14 +65,17 @@ func longestPluginRoute(snap []pluginRoute, path string) int {
 	return best
 }
 
-// pluginRoutesShorterThan returns the routes matching path whose pattern is
-// SHORTER than maxLen, most-specific first. Only used on the RARE path where the
-// longest match declined (returned nil) and routing must fall through to the
-// next-broadest — so the allocation here is off the common path.
-func pluginRoutesShorterThan(snap []pluginRoute, path string, maxLen int) []pluginRoute {
+// pluginRoutesExcept returns every route matching path EXCEPT the one at
+// exceptIdx, most-specific first. Only used on the RARE path where the longest
+// match declined (returned nil) and routing must fall through — so the
+// allocation is off the common path. It includes same-length siblings of the
+// declined route (two plugins can claim the same pattern), not just strictly
+// shorter ones, so the "falls through to the next match" contract holds even for
+// a tie.
+func pluginRoutesExcept(snap []pluginRoute, path string, exceptIdx int) []pluginRoute {
 	var out []pluginRoute
-	for _, r := range snap {
-		if len(r.pattern) < maxLen && r.matches(path) {
+	for i, r := range snap {
+		if i != exceptIdx && r.matches(path) {
 			out = append(out, r)
 		}
 	}
