@@ -88,12 +88,17 @@ func (p *AuditRouter) OnDispatch(ev gateway.DispatchEvent) error {
 		_, _ = p.out.Write(append(line, '\n'))
 	}
 	p.mu.Lock()
+	// cursor is ALWAYS the next-write position. During growth we append (writing
+	// at len(ring) == cursor); once full we overwrite ring[cursor]. Advancing
+	// cursor on BOTH keeps recentEvents' newest-first math (cursor-1-i) correct
+	// while the ring is still filling — otherwise it read only empty slots and
+	// returned nothing until the ring was full.
 	if len(p.ring) < p.size {
 		p.ring = append(p.ring, ev)
 	} else {
 		p.ring[p.cursor] = ev
-		p.cursor = (p.cursor + 1) % p.size
 	}
+	p.cursor = (p.cursor + 1) % p.size
 	p.mu.Unlock()
 	return nil
 }
