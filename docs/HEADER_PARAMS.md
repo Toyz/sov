@@ -164,11 +164,24 @@ Docs for the feature must state this at the top, not in a footnote.
   reflection-free `Handle` fast path (`rpc/handle.go`, gated on `HeaderFields`).
 - Gateway populates the getter in `dispatchLocal` — `gateway/dispatch.go`.
 - `ParamField.Source`/`Header` (`rpc/descriptor.go`), set in
-  `describeFieldMap` (`rpc/schema.go`); excluded from MCP `inputSchema`
-  (`gateway/builtin/mcp/tools.go`), from the type catalog / all descriptor-based
-  codegen (`gateway/typecatalog.go` `withoutHeaderParams`), and from the
-  explorer's live TS render (`rpc/tsrender/render.go`).
+  `describeFieldMap` (`rpc/schema.go`). These ride the `/rpc/_introspect`
+  payload, so every introspection consumer sees the split:
+  - MCP `inputSchema` excludes header fields (`gateway/builtin/mcp/tools.go`).
+  - The type catalog — and every descriptor-based codegen (ts/swift/kotlin/
+    python/go) — excludes them (`gateway/typecatalog.go` `withoutHeaderParams`),
+    since a header field is not part of a type's JSON shape.
+  - The explorer's live TS render omits them (`rpc/tsrender/render.go`).
+  - The explorer UI renders header params in the method's Parameters table with
+    a "header" badge and the header name (not a blank body row), gives them
+    dedicated inputs under a "Headers" block in Try-it, keeps them OUT of the
+    args JSON, and sends them as real HTTP headers on execute
+    (`gateway/builtin/explorer/static/{app.js,style.css}`).
 
-Tests: `rpc/header_test.go` (field map, reflect + Handle bind, scalar/required),
-`gateway/header_param_test.go` (end-to-end + LinkPeer mesh hop),
-`gateway/builtin/mcp/mcp_test.go` (schema exclusion + bound-from-forwarded-header).
+The invariant across surfaces: `md.Params` carries a header field (flagged
+`Source="header"`, no JSON name) so a method's inputs are fully described;
+`report.Types[...].Fields` (the JSON shape) does not.
+
+Tests: `rpc/header_test.go` (field map, reflect + Handle bind, scalar/required,
+Describe marks Source), `gateway/header_param_test.go` (end-to-end + LinkPeer
+mesh hop + introspect type/param split), `gateway/builtin/mcp/mcp_test.go`
+(schema exclusion + bound-from-forwarded-header).

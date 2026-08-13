@@ -136,6 +136,45 @@ func TestHeaderParam_MixedBodyAndHeader(t *testing.T) {
 	}
 }
 
+// Describe marks a header field with Source="header" and the header name, and
+// gives it no JSON wire name — the metadata the explorer/introspection surface
+// renders it from.
+func TestHeaderParam_DescribeMarksSource(t *testing.T) {
+	e := NewEngine()
+	e.Register(&HdrRouter{})
+	var mixParams []ParamField
+	for _, rd := range e.Describe() {
+		if rd.Router != "Hdr" {
+			continue
+		}
+		for _, m := range rd.Methods {
+			if m.Method == "mix" {
+				mixParams = m.Params
+			}
+		}
+	}
+	if mixParams == nil {
+		t.Fatal("Hdr.mix not described")
+	}
+	var hdr, body *ParamField
+	for i := range mixParams {
+		if mixParams[i].Source == "header" {
+			hdr = &mixParams[i]
+		} else {
+			body = &mixParams[i]
+		}
+	}
+	if hdr == nil {
+		t.Fatalf("header param absent from Describe: %+v", mixParams)
+	}
+	if hdr.Header != "X-Tenant-Id" || hdr.JSONName != "" {
+		t.Fatalf(`header ParamField = %+v, want Header="X-Tenant-Id" JSONName=""`, *hdr)
+	}
+	if body == nil || body.JSONName != "name" {
+		t.Fatalf("body param 'name' missing/wrong: %+v", body)
+	}
+}
+
 // The reflection-free Handle fast path binds header fields too.
 func TestHeaderParam_HandleFastPath(t *testing.T) {
 	e := NewEngine()

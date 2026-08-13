@@ -343,7 +343,10 @@ function renderMethodDetail(rd, md) {
                                      .map(pick), null, 2);
     }
     const obj = {};
-    for (const f of md.params) obj[f.jsonName] = pick(f);
+    for (const f of md.params) {
+      if (f.source === 'header') continue; // header params are sent as HTTP headers, not args
+      obj[f.jsonName] = pick(f);
+    }
     return JSON.stringify(obj, null, 2);
   };
   textarea.value = seedBody('named', false);
@@ -355,6 +358,33 @@ function renderMethodDetail(rd, md) {
       textarea.value = seedBody(activeShape, false);
     });
   });
+
+  // Header-bound params bind from real HTTP headers, not the args body — give
+  // them their own inputs and send them as headers on execute.
+  const headerParams = (md.params || []).filter(f => f.source === 'header');
+  const headerInputs = {};
+  if (headerParams.length) {
+    const hhead = document.createElement('div');
+    hhead.className = 'header-params-head';
+    hhead.textContent = 'Headers';
+    detail.appendChild(hhead);
+    const hwrap = document.createElement('div');
+    hwrap.className = 'header-inputs';
+    for (const f of headerParams) {
+      const label = document.createElement('label');
+      label.className = 'header-input';
+      label.innerHTML = `<span class="header-name">${escapeHTML(f.header)}</span>` +
+        (f.required ? ' <span class="required">required</span>' : '');
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.spellcheck = false;
+      inp.placeholder = (f.example !== undefined && f.example !== '') ? String(f.example) : (f.schemaType || 'value');
+      label.appendChild(inp);
+      hwrap.appendChild(label);
+      headerInputs[f.header] = inp;
+    }
+    detail.appendChild(hwrap);
+  }
 
   const row = document.createElement('div');
   row.className = 'execute-row';
@@ -382,11 +412,16 @@ function renderMethodDetail(rd, md) {
     try { args = JSON.parse(textarea.value); }
     catch (e) { out.textContent = 'json parse error: ' + e.message; return; }
     const body = JSON.stringify({args});
+    const hdrs = {'Content-Type': 'application/json'};
+    for (const name in headerInputs) {
+      const v = headerInputs[name].value;
+      if (v !== '') hdrs[name] = v;
+    }
     out.textContent = '// executing...';
     try {
       const resp = await fetch(md.postPath, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: hdrs,
         body,
       });
       const txt = await resp.text();
@@ -520,14 +555,19 @@ function fieldsTableHTML(fields, opts) {
         ].filter(Boolean).join(' ');
         const typeRef = f.typeName
           ? ` <span class="type-ref">(${escapeHTML(f.typeName)})</span>` : '';
+        // A header-bound param has no JSON wire name — show its header name and
+        // a "header" badge so it reads as an ambient header, not a body field.
+        const isHeader = f.source === 'header';
+        const primaryName = isHeader ? f.header : f.jsonName;
+        const srcBadge = isHeader ? ' <span class="src-badge" title="bound from this request header">header</span>' : '';
         let nameCell;
         if (opts.docs && (f.title || f.desc)) {
           nameCell =
-            `<div class="field-name">${f.title ? escapeHTML(f.title) : escapeHTML(f.jsonName)}</div>` +
-            (f.title ? `<div class="field-sub">${escapeHTML(f.jsonName)}</div>` : '') +
+            `<div class="field-name">${f.title ? escapeHTML(f.title) : escapeHTML(primaryName)}${srcBadge}</div>` +
+            (f.title ? `<div class="field-sub">${escapeHTML(primaryName)}</div>` : '') +
             (f.desc ? `<div class="field-desc">${escapeHTML(f.desc)}</div>` : '');
         } else {
-          nameCell = `<span class="field-name">${escapeHTML(f.jsonName)}</span>`;
+          nameCell = `<span class="field-name">${escapeHTML(primaryName)}</span>${srcBadge}`;
         }
         return `
           <tr${f.deprecated ? ' class="row-deprecated"' : ''}>
