@@ -10,7 +10,7 @@ import (
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/metrics"
 	"github.com/Toyz/sov/gateway/builtin/requestid"
-	"github.com/Toyz/sov/gateway/gwtest"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 

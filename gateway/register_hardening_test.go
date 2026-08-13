@@ -11,7 +11,7 @@ import (
 	. "github.com/Toyz/sov/gateway"
 	meshsecretproto "github.com/Toyz/sov/gateway/builtin/meshsecret/proto"
 	"github.com/Toyz/sov/gateway/builtin/registry"
-	"github.com/Toyz/sov/gateway/gwtest"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 

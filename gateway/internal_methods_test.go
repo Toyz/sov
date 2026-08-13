@@ -2,7 +2,7 @@ package gateway_test
 
 import (
 	. "github.com/Toyz/sov/gateway"
-	"github.com/Toyz/sov/gateway/gwtest"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 
 	"context"
 	"encoding/json"

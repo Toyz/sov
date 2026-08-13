@@ -9,7 +9,7 @@ import (
 
 	. "github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/batch"
-	"github.com/Toyz/sov/gateway/gwtest"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 

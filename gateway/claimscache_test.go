@@ -8,7 +8,7 @@ import (
 	"time"
 
 	. "github.com/Toyz/sov/gateway"
-	"github.com/Toyz/sov/gateway/gwtest"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 )
 
 // spyCache is a ClaimsCache that records Get/Put so the test can prove the

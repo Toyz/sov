@@ -5,7 +5,7 @@ import (
 	"time"
 
 	. "github.com/Toyz/sov/gateway"
-	"github.com/Toyz/sov/gateway/gwtest"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 )
 
 // RecordDispatch is exported for third-party surface authors who emit a

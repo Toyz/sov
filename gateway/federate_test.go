@@ -13,7 +13,7 @@ import (
 
 	. "github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/registry"
-	"github.com/Toyz/sov/gateway/gwtest"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 )
 
 // ---- helpers --------------------------------------------------------------

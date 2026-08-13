@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/Toyz/sov/gateway"
-	"github.com/Toyz/sov/gateway/gwtest"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 )
 
 func TestAuth_TranslatesClaimsToHeaders(t *testing.T) {

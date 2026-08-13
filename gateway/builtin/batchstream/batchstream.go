@@ -36,6 +36,7 @@ package batchstream
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -44,10 +45,30 @@ import (
 	"github.com/Toyz/sov/rpc"
 )
 
+// Fan-out bounds (HELL-296). Each entry is a goroutine plus a full
+// sub-dispatch, so unbounded fan-out is a resource-exhaustion vector; both
+// axes are capped by default.
+const (
+	defaultMaxBatchSize   = 500
+	defaultMaxConcurrency = 32
+)
+
+// Config bounds the streaming batch. Zero fields take the defaults.
+type Config struct {
+	// MaxBatchSize caps entries in one /rpc/_batchstream call; a larger batch
+	// is rejected 413 before streaming starts. Zero uses the default (500).
+	MaxBatchSize int
+	// MaxConcurrency caps how many entries dispatch concurrently (a
+	// worker-pool semaphore). Zero uses the default (32).
+	MaxConcurrency int
+}
+
 // Plugin owns /rpc/_batchstream. It holds the gateway pointer (via Apply)
 // to dispatch each entry through the full request chain.
 type Plugin struct {
-	gw *gateway.Gateway
+	gw             *gateway.Gateway
+	maxBatchSize   int
+	maxConcurrency int
 }
 
 // Compile-time proof of the hooks bound — a signature drift is a build
@@ -60,10 +81,28 @@ var (
 	_ gateway.PluginDependency = (*Plugin)(nil)
 )
 
-// New returns the streaming-batch route handler.
+// New returns the streaming-batch route handler. An optional Config bounds
+// fan-out; New() with no argument keeps the defaults.
 //
 //	gw.Use(batchstream.New())
-func New() *Plugin { return &Plugin{} }
+func New(cfg ...Config) *Plugin {
+	if len(cfg) > 1 {
+		panic("batchstream.New: at most one Config")
+	}
+	var c Config
+	if len(cfg) == 1 {
+		c = cfg[0]
+	}
+	maxBatch := c.MaxBatchSize
+	if maxBatch <= 0 {
+		maxBatch = defaultMaxBatchSize
+	}
+	maxConc := c.MaxConcurrency
+	if maxConc <= 0 {
+		maxConc = defaultMaxConcurrency
+	}
+	return &Plugin{maxBatchSize: maxBatch, maxConcurrency: maxConc}
+}
 
 func (h *Plugin) PluginName() string { return "batchstream" }
 
@@ -125,6 +164,15 @@ func (h *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 	if len(br.Calls) == 0 {
 		return gateway.ErrorResponse(rpc.BadRequest("calls is empty"))
 	}
+	if len(br.Calls) > h.maxBatchSize {
+		return gateway.ErrorResponse(&rpc.Error{Status: http.StatusRequestEntityTooLarge, Code: "BAD_REQUEST",
+			Message: fmt.Sprintf("batch too large: %d calls exceeds limit %d", len(br.Calls), h.maxBatchSize)})
+	}
+
+	// Bound concurrent entry dispatch. Each entry still gets a goroutine
+	// (count bounded by the maxBatchSize check above), but at most
+	// maxConcurrency dispatch at once.
+	sem := make(chan struct{}, h.maxConcurrency)
 
 	hdr := gateway.Header{}
 	hdr.Set("Content-Type", "application/x-ndjson")
@@ -147,6 +195,8 @@ func (h *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 			for alias, call := range br.Calls {
 				go func(alias string, call gateway.BatchCall) {
 					defer wg.Done()
+					sem <- struct{}{}        // acquire a concurrency slot
+					defer func() { <-sem }() // release it
 					write(alias, h.runOne(ctx, req, call))
 				}(alias, call)
 			}
