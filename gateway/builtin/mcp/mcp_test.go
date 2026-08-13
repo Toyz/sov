@@ -357,3 +357,34 @@ func TestMCP_NoRPCBuiltin_MCPStillServes(t *testing.T) {
 		t.Fatalf("MCP tool call failed on rpc-disabled node: %v", res)
 	}
 }
+
+// LaterToolRouter is registered AFTER the introspect catalog warms.
+type LaterToolRouter struct{ mcp.Tool }
+
+func (LaterToolRouter) Fetch(ctx *rpc.Context) (string, error) { return "later", nil }
+
+// A tool router registered AFTER tools/list warmed the 30s introspect cache
+// must appear in the NEXT tools/list immediately — Gateway.Register invalidates
+// the catalog, so a dynamically-added tool is not hidden for the whole TTL.
+func TestMCP_RegisterAfterWarmInvalidatesCatalog(t *testing.T) {
+	gw := gateway.New()
+	gw.Register(&NoteToolsRouter{})
+	gw.MustUse(mcp.New())
+
+	// Warm the catalog.
+	warm := toolNames(mcpPost(t, gw, "", "tools/list", map[string]any{}))
+	if !warm["NoteTools.read"] {
+		t.Fatalf("warm tools/list missing NoteTools.read: %v", warm)
+	}
+	if warm["LaterTool.fetch"] {
+		t.Fatalf("LaterTool.fetch present before it was registered: %v", warm)
+	}
+
+	// Register a new tool router after the cache is warm.
+	gw.Register(&LaterToolRouter{})
+
+	after := toolNames(mcpPost(t, gw, "", "tools/list", map[string]any{}))
+	if !after["LaterTool.fetch"] {
+		t.Fatalf("tool registered after warm not surfaced (catalog not invalidated): %v", after)
+	}
+}

@@ -13,9 +13,12 @@ import (
 // your own for anything else, so the framework keeps zero external deps.
 //
 // SCOPE: the codec governs BUSINESS method params/results at the engine
-// dispatch seam. Framework envelopes (_batch, _introspect, and the authz
-// Check / auth verify sub-dispatches) are JSON by construction and are not
-// re-encoded through a custom codec. See HELL-286.
+// dispatch seam. Framework envelopes (_batch, _introspect, batch/MCP entry
+// dispatches, and the authz Check / auth verify sub-dispatches) are pinned to
+// JSON: they all carry Content-Type: application/json, which the gateway
+// resolves to the registered json codec — never to a SetCodec-swapped default.
+// A custom default codec therefore never re-encodes framework envelopes. See
+// HELL-286.
 type Codec interface {
 	// Name is the codec's wire identity (e.g. "json"), used for
 	// Content-Type negotiation.

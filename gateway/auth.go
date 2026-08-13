@@ -213,7 +213,9 @@ func (g *Gateway) verifyToken(ctx context.Context, token string) (*Claims, error
 	sub := &Request{
 		Method: http.MethodPost,
 		Path:   "/rpc/" + g.authBinding.Service + "/" + g.authBinding.Method,
-		Header: Header{}, // never forward inbound headers for the verify call
+		// Pin JSON so this sub-dispatch decodes as JSON regardless of any
+		// SetCodec-swapped default; never forward inbound headers for verify.
+		Header: Header{"Content-Type": "application/json"},
 		Body:   body,
 	}
 	resp := g.Dispatch(ctx, sub)
@@ -252,7 +254,8 @@ func (g *Gateway) checkAuthz(ctx context.Context, claims *Claims, service, metho
 	sub := &Request{
 		Method: http.MethodPost,
 		Path:   "/rpc/" + g.authzBinding.Service + "/" + g.authzBinding.Method,
-		Header: Header{},
+		// Pin JSON: decode as JSON regardless of a SetCodec-swapped default.
+		Header: Header{"Content-Type": "application/json"},
 		Body:   body,
 	}
 	resp := g.Dispatch(ctx, sub)

@@ -11,8 +11,12 @@
 // metadata that drives /rpc. tools/call routes through the gateway's mesh fabric
 // (Authorize + Dispatch), so the full request chain — auth, authz, and the
 // declarative perm (HELL-280) — gates an MCP call exactly as it gates the same
-// method over /rpc, AND a tool whose service is federated to another node just
-// routes there. There is no separate MCP capability model: MCP rides the mesh.
+// method over /rpc, AND a tool whose service is federated to another node via
+// registry federation (JoinMesh) just routes there — each node tags its own
+// tool routers and the "mcp" tag rides the descriptor upstream. There is no
+// separate MCP capability model: MCP rides the mesh. (In-process LinkPeer
+// nodes are the one exception: they are dispatch targets, not introspection
+// sources, so their routers are not surfaced as tools — see LinkPeer SCOPE.)
 //
 // Transport is Streamable-HTTP (JSON-RPC 2.0 over POST, single-JSON reply);
 // SSE tools, resources, and prompts are follow-ups.

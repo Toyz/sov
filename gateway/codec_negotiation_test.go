@@ -132,3 +132,27 @@ func TestCodec_InternalAuthzStaysJSON(t *testing.T) {
 		t.Fatalf("authz deny not JSON-framed: %s", resp.Body)
 	}
 }
+
+// SetCodec swaps the ENGINE DEFAULT to a non-JSON codec. The internal auth
+// verify sub-dispatch must STILL decode its VerifyParams as JSON — it is pinned
+// via Content-Type: application/json — or the bearer is silently dropped by the
+// swapped default's no-op decode and the call 401s (or worse, fails open).
+// RegisterCodec (which keeps JSON the default) never exposes this; only
+// SetCodec does, so the other codec tests miss it.
+func TestCodec_AuthVerifyPinnedJSON_UnderSetCodecDefault(t *testing.T) {
+	gw := gwtest.New()
+	gw.RegisterAuth(&AuthRouter{})
+	gw.Register(&WhoRouter{})
+	gw.Engine().SetCodec(testCodec{}) // non-JSON codec becomes the DEFAULT
+
+	resp := gw.Handle(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/Who/me",
+		Header: Header{"Authorization": "Bearer good-x"}, // no business Content-Type
+	})
+	// 200 proves verify decoded "good-x" as JSON. Pre-fix the verify sub-dispatch
+	// inherited the swapped default (testCodec's no-op decode), dropped Token,
+	// and 401'd.
+	if resp.Status != 200 {
+		t.Fatalf("auth under SetCodec(non-JSON default) = %d, want 200 (verify must be JSON-pinned); body=%s", resp.Status, resp.Body)
+	}
+}

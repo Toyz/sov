@@ -87,6 +87,9 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 // subjectOf returns the authenticated subject the auth middleware stamped onto
 // req (a subject string or *Claims), or "" for an anonymous request.
 func subjectOf(req *Request) string {
+	if req == nil {
+		return ""
+	}
 	switch u := req.User.(type) {
 	case string:
 		return u
@@ -145,8 +148,12 @@ func errCodeFromBody(body []byte) string {
 }
 
 // codecNameFromContentType maps an inbound Content-Type to a codec registry
-// name (HELL-286). "application/json" (or empty) yields "" — the caller then
-// leaves the engine default (JSON). Other "application/[x-]<sub>" types yield
+// name (HELL-286). Empty Content-Type yields "" — the caller leaves the engine
+// default. "application/json" yields "json" EXPLICITLY (not "") so a request
+// declaring JSON always resolves to the registered json codec, never to a
+// swapped-in SetCodec default — this is what keeps framework sub-dispatches
+// (auth verify/check, batch, MCP tools/call), which all send Content-Type:
+// application/json, pinned to JSON. Other "application/[x-]<sub>" types yield
 // "<sub>" (e.g. application/x-msgpack -> "msgpack"); an unregistered name
 // falls back to the default at ResolveCodec time. Parameters (";charset=…")
 // are ignored.
@@ -162,11 +169,10 @@ func codecNameFromContentType(ct string) string {
 	if !strings.HasPrefix(ct, prefix) {
 		return ""
 	}
-	sub := strings.TrimPrefix(ct[len(prefix):], "x-")
-	if sub == "json" {
-		return "" // the default; no per-request selection needed
-	}
-	return sub
+	// "application/json" -> "json" (an explicit registry name), so JSON is
+	// resolved from the codec registry, not the ambient default a consumer may
+	// have swapped via SetCodec. Framework sub-dispatches rely on this.
+	return strings.TrimPrefix(ct[len(prefix):], "x-")
 }
 
 // Dispatch is the mesh fabric. It resolves req's service and routes the call to
@@ -225,12 +231,14 @@ func (g *Gateway) DispatchResolved(ctx context.Context, req *Request, router, me
 func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req *Request) *Response {
 	rc := rpc.NewContext(ctx)
 	// Codec negotiation (HELL-286): map the inbound Content-Type to a
-	// registered business codec. Absent/unknown/json all resolve to the
-	// JSON default, so internal sub-dispatches (auth verify, authz check,
-	// batch entries) — which carry no codec Content-Type — stay JSON.
-	// Only negotiate when more than one codec is registered — the common
-	// JSON-only deployment skips the Content-Type parse entirely and Dispatch
-	// falls back to the default codec.
+	// registered business codec. An absent Content-Type resolves to the
+	// engine default; an explicit "application/json" resolves to the
+	// registered json codec (NOT a SetCodec-swapped default), so internal
+	// sub-dispatches (auth verify/check, batch, MCP tools/call) — which all
+	// send Content-Type: application/json — stay JSON even when a consumer
+	// SetCodec'd a non-JSON default. Only negotiate when more than one codec
+	// is registered — the common JSON-only deployment skips the Content-Type
+	// parse entirely and Dispatch falls back to the default codec.
 	var selected rpc.Codec
 	if g.engine.Negotiable() {
 		if name := codecNameFromContentType(req.Header.Get("Content-Type")); name != "" {

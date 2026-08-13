@@ -320,6 +320,10 @@ func (g *Gateway) Engine() *rpc.Engine { return g.engine }
 func (g *Gateway) Register(router any) {
 	g.engine.Register(router)
 	g.autoBindRoles(router)
+	// A router registered after the catalog warmed must show up in
+	// introspection-driven surfaces (MCP tools/list, explorer) immediately,
+	// not after the 30s TTL — same invalidation a remote join/leave triggers.
+	g.invalidateCatalog()
 }
 
 // RegisterResolver returns the gateway's register-based remote resolver
