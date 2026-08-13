@@ -53,10 +53,11 @@ type Plugin struct {
 // Compile-time proof of the hooks bound — a signature drift is a build
 // error here, not a silent non-binding at runtime.
 var (
-	_ gateway.Plugin        = (*Plugin)(nil)
-	_ gateway.PluginDoc     = (*Plugin)(nil)
-	_ gateway.ConfigApplier = (*Plugin)(nil)
-	_ gateway.RouteHandler  = (*Plugin)(nil)
+	_ gateway.Plugin           = (*Plugin)(nil)
+	_ gateway.PluginDoc        = (*Plugin)(nil)
+	_ gateway.ConfigApplier    = (*Plugin)(nil)
+	_ gateway.RouteHandler     = (*Plugin)(nil)
+	_ gateway.PluginDependency = (*Plugin)(nil)
 )
 
 // New returns the streaming-batch route handler.
@@ -68,8 +69,10 @@ func (h *Plugin) PluginName() string { return "batchstream" }
 
 // Requires the rpc surface: each entry fans out through gw.Handle to
 // /rpc/{service}/{method}, so without the rpc builtin every entry 404s. Fail
-// fast at boot instead of per-entry at request time.
+// fast at boot instead of per-entry at request time. (Requires AND After are
+// BOTH needed to satisfy gateway.PluginDependency.)
 func (h *Plugin) Requires() []string { return []string{"rpc"} }
+func (h *Plugin) After() []string    { return nil }
 
 func (h *Plugin) Doc() string {
 	return "Streaming /rpc/_batchstream — dispatches batch entries concurrently and emits each result as NDJSON the moment it resolves, so a fast call never waits on a slow sibling (avoids the all-or-nothing head-of-line blocking of /rpc/_batch)."

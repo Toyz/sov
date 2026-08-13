@@ -42,8 +42,12 @@ func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 	// Plugin hook: DispatchHook fires post-handler with the resolved
 	// router/method/status. Framework endpoints get an empty
 	// router/method so hooks can filter by Path.
-	router, method, _ := rpc.SplitRPCPath(req.Path)
-	g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode)
+	// Skip the generic per-request event if a surface already recorded a
+	// specific one for this request (RecordDispatch, e.g. MCP tools/call).
+	if !req.recorded {
+		router, method, _ := rpc.SplitRPCPath(req.Path)
+		g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode)
+	}
 	return resp
 }
 
@@ -102,6 +106,12 @@ func subjectOf(req *Request) string {
 func (g *Gateway) RecordDispatch(req *Request, router, method, path string, resp *Response, started time.Time) {
 	if resp == nil {
 		return
+	}
+	if req != nil {
+		// Mark the request so handle skips its generic per-request event — this
+		// specific one replaces it, so the call is counted ONCE (parity with a
+		// direct /rpc call), not twice (outer /mcp + tool).
+		req.recorded = true
 	}
 	g.recordDispatchEventWithMode(router, method, path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode)
 }

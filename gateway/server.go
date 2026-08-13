@@ -52,6 +52,13 @@ type Request struct {
 	// before dispatch. nil for anonymous calls. Gateway copies this onto
 	// the rpc.Context handed to handlers.
 	User any
+
+	// recorded is set by RecordDispatch when a surface emits a specific
+	// dispatch event for this request (e.g. an MCP tools/call resolves to a
+	// router/method). handle then skips its generic per-request event so the
+	// call is counted ONCE, not double — the outer /mcp event PLUS the tool
+	// event. Unexported: internal bookkeeping, not part of the wire request.
+	recorded bool
 }
 
 // Response is what the RequestHandler returns. Server writes it back.

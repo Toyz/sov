@@ -27,6 +27,11 @@ func (r *recordHook) OnDispatch(ev gateway.DispatchEvent) error {
 	r.events = append(r.events, ev)
 	return nil
 }
+func (r *recordHook) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.events)
+}
 func (r *recordHook) get(router, method string) (gateway.DispatchEvent, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -55,11 +60,15 @@ func TestMCP_ToolCallEmitsDispatchEvent(t *testing.T) {
 	gw.MustUse(rec)
 	gw.MustUse(mcp.New())
 	mcpPost(t, gw, "", "tools/call", map[string]any{"name": "NoteTools.read", "arguments": map[string]any{"id": "9"}})
+	// EXACTLY ONE event — the tool's — not a double (tool + generic /mcp).
+	if n := rec.count(); n != 1 {
+		t.Fatalf("tools/call must record exactly one event, got %d: %+v", n, rec.events)
+	}
 	if ev, ok := rec.get("NoteTools", "read"); !ok || ev.Status != http.StatusOK {
 		t.Fatalf("expected 200 dispatch event for NoteTools.read: %+v", rec.events)
 	}
 
-	// authz-denied path is recorded too (the key forensic gap).
+	// authz-denied path is recorded too (the key forensic gap) — and still once.
 	gwd := gateway.New()
 	gwd.Register(&NoteToolsRouter{})
 	gwd.RegisterAuthz(&denyAuthz{})
@@ -69,6 +78,20 @@ func TestMCP_ToolCallEmitsDispatchEvent(t *testing.T) {
 	mcpPost(t, gwd, "", "tools/call", map[string]any{"name": "NoteTools.read", "arguments": map[string]any{"id": "9"}})
 	if ev, ok := recd.get("NoteTools", "read"); !ok || ev.Status != http.StatusForbidden {
 		t.Fatalf("denied tool call should record a 403 dispatch event: %+v", recd.events)
+	}
+	if n := recd.count(); n != 1 {
+		t.Fatalf("denied tools/call must record exactly one event, got %d: %+v", n, recd.events)
+	}
+
+	// An unknown-tool probe is recorded (enumeration signal), not invisible.
+	gwp := gateway.New()
+	gwp.Register(&NoteToolsRouter{})
+	recp := &recordHook{}
+	gwp.MustUse(recp)
+	gwp.MustUse(mcp.New())
+	mcpPost(t, gwp, "", "tools/call", map[string]any{"name": "NoteTools.doesNotExist", "arguments": map[string]any{}})
+	if ev, ok := recp.get("", "NoteTools.doesNotExist"); !ok || ev.Status != http.StatusNotFound {
+		t.Fatalf("unknown-tool probe should record a 404 event with the probed name: %+v", recp.events)
 	}
 }
 

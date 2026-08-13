@@ -174,8 +174,14 @@ type toolCallParams struct {
 // MCP-specific mesh code. Identity was already resolved on the /mcp request
 // (mcpReq.User) by the auth middleware; the MCP client's bearer is the caller.
 func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params json.RawMessage) (map[string]any, *jsonRPCError) {
+	// Every tools/call records exactly ONE dispatch event on mcpReq (which
+	// suppresses handle's generic /mcp event) — so audit/metrics see a tool call
+	// (and its failures/denials/probes) with parity to a direct /rpc call, not a
+	// double count and not an opaque /mcp 200.
+	started := time.Now()
 	var tc toolCallParams
 	if err := json.Unmarshal(params, &tc); err != nil {
+		p.gw.RecordDispatch(mcpReq, "", "", "/mcp/tools/call", &gateway.Response{Status: http.StatusBadRequest, Mode: gateway.ModePlugin}, started)
 		return nil, &jsonRPCError{code: -32602, msg: "invalid params"}
 	}
 	var router, method string
@@ -186,15 +192,15 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 		}
 	}
 	if router == "" {
+		// Record the probe with the attempted name so tool-name enumeration is
+		// visible in the audit trail, not indistinguishable from a tools/list.
+		p.gw.RecordDispatch(mcpReq, "", tc.Name, "/mcp/tools/call", &gateway.Response{Status: http.StatusNotFound, Mode: gateway.ModePlugin}, started)
 		return nil, &jsonRPCError{code: -32602, msg: "unknown tool: " + tc.Name}
 	}
 	path := "/rpc/" + router + "/" + method
-	started := time.Now()
 
 	// Same authz/perm gate /rpc applies; claims were resolved on the /mcp
-	// request by the auth middleware, so reuse them (no re-verify). Record the
-	// dispatch event on BOTH paths so audit/metrics see the tool call — and,
-	// critically, authz DENIALS — exactly as they see a /rpc call.
+	// request by the auth middleware, so reuse them (no re-verify).
 	claims, _ := mcpReq.User.(*gateway.Claims)
 	if err := p.gw.Authorize(ctx, claims, router, method, mcpReq.Header); err != nil {
 		resp := gateway.ErrorResponseFromAny(err)
@@ -221,7 +227,10 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 		RemoteIP: mcpReq.RemoteIP,
 	}
 	resp := p.gw.Dispatch(ctx, sub)
-	p.gw.RecordDispatch(sub, router, method, path, resp, started)
+	// Record against mcpReq (the outer request handle sees), not sub, so the
+	// generic /mcp event is suppressed; the resolved router/method/status ride
+	// the one event this call produces.
+	p.gw.RecordDispatch(mcpReq, router, method, path, resp, started)
 	return toolResult(resp), nil
 }
 

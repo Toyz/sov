@@ -54,10 +54,11 @@ type Plugin struct {
 // Compile-time proof of the hooks this plugin binds — a signature
 // drift here is a build error, not a silent non-binding at runtime.
 var (
-	_ gateway.Plugin        = (*Plugin)(nil)
-	_ gateway.PluginDoc     = (*Plugin)(nil)
-	_ gateway.ConfigApplier = (*Plugin)(nil)
-	_ gateway.RouteHandler  = (*Plugin)(nil)
+	_ gateway.Plugin           = (*Plugin)(nil)
+	_ gateway.PluginDoc        = (*Plugin)(nil)
+	_ gateway.ConfigApplier    = (*Plugin)(nil)
+	_ gateway.RouteHandler     = (*Plugin)(nil)
+	_ gateway.PluginDependency = (*Plugin)(nil)
 )
 
 // New returns the batch plugin from cfg.
@@ -74,8 +75,11 @@ func (p *Plugin) PluginName() string { return "batch" }
 
 // Requires the rpc surface: batch fans each entry out through gw.Handle to
 // /rpc/{service}/{method}, so without the rpc builtin every entry 404s. Fail
-// fast at boot instead of per-entry at request time.
+// fast at boot instead of per-entry at request time. (Requires AND After are
+// BOTH needed to satisfy gateway.PluginDependency — one alone is a silent
+// non-binding.)
 func (p *Plugin) Requires() []string { return []string{"rpc"} }
+func (p *Plugin) After() []string    { return nil }
 
 // Doc surfaces a one-line description in /rpc/_introspect + the explorer.
 func (p *Plugin) Doc() string {
