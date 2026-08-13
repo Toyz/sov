@@ -42,6 +42,25 @@ sov:"header=<HeaderName>,required"   // 400 if the header is absent/empty
 - A field is either a body field OR a header field, never both. `header=` and a
   `json:` wire name on the same field is a build error (ambiguous source).
 
+### Build-time validation (all fail loud at boot)
+
+A `header=` field is rejected by `BuildFieldMap` / `Register` when it:
+
+- names the reserved **`X-Sov-*`** namespace (case-insensitive) — the verified
+  claims channel is off-limits to user params;
+- is **not a scalar** (string/bool/int/uint/float, or a pointer to one) — a
+  header is a single string;
+- **duplicates** another field's header name (case-insensitive);
+- has an empty name, or also carries a `json:` wire name;
+- sits on a **nested struct field** rather than a direct field of the top-level
+  params struct — a nested header field is never bound at runtime and, because
+  nested structs decode via plain `json.Unmarshal`, would otherwise be settable
+  from the request body while the schema shows it absent (a spoofing vector).
+  Enforced by `RejectNestedHeaders` at registration.
+
+Header fields also consume no positional slot, so one may sit anywhere among
+ordinary body fields without breaking positional (`{"args":[...]}`) dispatch.
+
 ## Binding pipeline
 
 The core constraint: the **rpc engine stays HTTP-agnostic**. It never learns
@@ -124,8 +143,10 @@ trust.
   (auth middleware). A header-bound `tenant` must STILL be authorized against
   `Claims` by the handler or a `MethodAuthorizer` — the binding does not confer
   trust.
-- The `X-Sov-*` claim namespace is reserved and edge-stripped; header-params
-  cannot read it (and must not try to smuggle identity through a side header).
+- The `X-Sov-*` claim namespace is reserved (verified claims travel there
+  between trusted nodes). `header=` in that namespace is a **build error**
+  (case-insensitive) — a param can never read or shadow the claim channel,
+  regardless of a node's `TrustUpstreamClaims` wiring.
 - Because header-params are untrusted at every boundary, they suit the
   re-verify-at-each-hop posture: the value is data to be checked, never a
   standing grant.

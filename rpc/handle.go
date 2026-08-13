@@ -120,6 +120,9 @@ func typedParamMap(pt reflect.Type, router, method string) (*FieldMap, bool) {
 	if err != nil {
 		panic("rpc.Handle: " + router + "." + method + " params " + pt.String() + ": " + err.Error())
 	}
+	if err := RejectNestedHeaders(pt); err != nil {
+		panic("rpc.Handle: " + router + "." + method + " params " + pt.String() + ": " + err.Error())
+	}
 	return fm, true
 }
 

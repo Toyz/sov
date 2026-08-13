@@ -634,6 +634,9 @@ func buildEntry(typeName string, rv reflect.Value, m reflect.Method) *methodEntr
 		if err != nil {
 			panic(fmt.Sprintf("rpc.Engine.Register: %s.%s params %s: %v", typeName, m.Name, entry.paramType, err))
 		}
+		if err := RejectNestedHeaders(entry.paramType); err != nil {
+			panic(fmt.Sprintf("rpc.Engine.Register: %s.%s params %s: %v", typeName, m.Name, entry.paramType, err))
+		}
 		entry.fieldMap = fm
 		entry.internal = fm.Internal
 		entry.internalHard = fm.InternalHard

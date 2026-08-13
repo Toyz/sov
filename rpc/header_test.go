@@ -185,3 +185,109 @@ func TestHeaderParam_HandleFastPath(t *testing.T) {
 		t.Fatalf("Handle header bind: status=%d body=%s", status, body)
 	}
 }
+
+// A header= in the reserved X-Sov-* verified-claims namespace is a build error
+// (case-insensitive) — a user param must never read the claim channel.
+func TestHeaderParam_RejectsReservedXSovNamespace(t *testing.T) {
+	type bad struct {
+		S string `sov:"header=X-Sov-Subject"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(bad{})); err == nil || !strings.Contains(err.Error(), "X-Sov-") {
+		t.Fatalf("expected reserved-namespace error, got %v", err)
+	}
+	type badLower struct {
+		S string `sov:"header=x-sov-issuer"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(badLower{})); err == nil {
+		t.Fatalf("reserved namespace must be case-insensitive; lowercase x-sov- accepted")
+	}
+}
+
+// A non-scalar header= field is rejected at build time, not deferred to a
+// first-request 400. Pointer-to-scalar is allowed.
+func TestHeaderParam_RejectsNonScalarType(t *testing.T) {
+	type inner struct{ X string }
+	type badStruct struct {
+		M inner `sov:"header=X-Meta"`
+	}
+	type badSlice struct {
+		T []string `sov:"header=X-Tags"`
+	}
+	type badMap struct {
+		M map[string]string `sov:"header=X-Map"`
+	}
+	for _, rt := range []reflect.Type{reflect.TypeOf(badStruct{}), reflect.TypeOf(badSlice{}), reflect.TypeOf(badMap{})} {
+		if _, err := BuildFieldMap(rt); err == nil || !strings.Contains(err.Error(), "scalar") {
+			t.Fatalf("expected scalar-type error for %s, got %v", rt, err)
+		}
+	}
+	type okPtr struct {
+		N *int `sov:"header=X-Count"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(okPtr{})); err != nil {
+		t.Fatalf("pointer-to-scalar header should build, got %v", err)
+	}
+}
+
+// Two fields binding from the same header is a build error (case-insensitive).
+func TestHeaderParam_RejectsDuplicateHeaderName(t *testing.T) {
+	type bad struct {
+		A string `sov:"header=X-Tenant-Id"`
+		B string `sov:"header=x-tenant-id"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(bad{})); err == nil || !strings.Contains(err.Error(), "duplicate sov header") {
+		t.Fatalf("expected duplicate-header error, got %v", err)
+	}
+}
+
+type nestedHdrMeta struct {
+	TenantID string `sov:"header=X-Tenant-Id"`
+}
+
+type nestedHdrParams struct {
+	Note string        `json:"note"`
+	Meta nestedHdrMeta `json:"meta"`
+}
+
+type NestedHdrRouter struct{}
+
+func (NestedHdrRouter) Go(_ *Context, p *nestedHdrParams) (string, error) { return p.Note, nil }
+
+// A header= on a NESTED struct field (never bound, and body-spoofable) fails
+// loud at registration.
+func TestHeaderParam_NestedHeaderRejectedAtRegister(t *testing.T) {
+	if err := RejectNestedHeaders(reflect.TypeOf(nestedHdrParams{})); err == nil || !strings.Contains(err.Error(), "nested") {
+		t.Fatalf("RejectNestedHeaders should reject a nested header field, got %v", err)
+	}
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Register with a nested header field should panic")
+		}
+	}()
+	NewEngine().Register(&NestedHdrRouter{})
+}
+
+type posHdrParams struct {
+	A string `json:"a"`
+	T string `sov:"header=X-Tenant-Id"`
+	B string `json:"b"`
+}
+
+type PosHdrRouter struct{}
+
+func (PosHdrRouter) Go(_ *Context, p *posHdrParams) (string, error) {
+	return p.A + "|" + p.B + "|" + p.T, nil
+}
+
+// An interspersed header= field must not desync positional auto-numbering: an
+// ordinary struct with a header field between two untagged body fields
+// registers and still dispatches positionally.
+func TestHeaderParam_PositionalNotDesyncedByHeaderField(t *testing.T) {
+	e := NewEngine()
+	e.Register(&PosHdrRouter{}) // must NOT panic on the contiguity check
+	rc := ctxWithHeaders(map[string]string{"X-Tenant-Id": "acme"})
+	status, body := e.Dispatch(rc, "PosHdr", "go", []byte(`{"args":["av","bv"]}`))
+	if status != 200 || !strings.Contains(string(body), "av|bv|acme") {
+		t.Fatalf("positional+header dispatch: status=%d body=%s", status, body)
+	}
+}

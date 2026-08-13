@@ -213,6 +213,12 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 				return nil, herr
 			}
 			if hdr != "" {
+				// A header is a single string, so a header= field must be a
+				// scalar (or pointer to one). Reject struct/slice/map at boot
+				// rather than deferring to a first-request 400.
+				if !isScalarHeaderType(sf.Type) {
+					return nil, fmt.Errorf("field %s.%s: sov header= requires a scalar field type (string/bool/int/uint/float, or a pointer to one), got %s", t.Name(), sf.Name, sf.Type)
+				}
 				info.HeaderSource = hdr
 				if err := applyFieldFlags(&info, rest, t, sf); err != nil {
 					return nil, err
@@ -301,18 +307,42 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 	// This makes `sov:"x"` mean "named only" (per PLAN line 661–672)
 	// while keeping the tag-free 80% case purely positional + named
 	// at the same source order.
+	// Auto-position untagged fields into the lowest positional slots NOT taken
+	// by an explicit position, in source order. Tagged (named-only) and header
+	// fields consume NO slot, so an interspersed header= or `sov:"name"` field
+	// no longer punches a gap that fails the contiguity check below.
+	usedPos := map[int]bool{}
+	for i := range fm.Fields {
+		if pendings[i].explicitPos {
+			usedPos[fm.Fields[i].Position] = true
+		}
+	}
+	nextPos := 0
 	for i, p := range pendings {
 		if p.explicitPos || p.hasSovTag {
 			continue
 		}
-		fm.Fields[i].Position = i
+		for usedPos[nextPos] {
+			nextPos++
+		}
+		fm.Fields[i].Position = nextPos
+		usedPos[nextPos] = true
 	}
 
 	// Build ByName + ByPos with validation. Header fields are bound from a
 	// request header, not the body, so they are collected into HeaderFields
 	// and kept OUT of the body wire maps.
+	seenHeader := map[string]bool{}
 	for i, f := range fm.Fields {
 		if f.HeaderSource != "" {
+			// Two fields binding from the same header is a silent
+			// mis-declaration — reject it, mirroring the body duplicate-name
+			// check. Case-insensitive: HTTP header names are.
+			key := strings.ToLower(f.HeaderSource)
+			if seenHeader[key] {
+				return nil, fmt.Errorf("field %s.%s: duplicate sov header= %q", t.Name(), f.GoName, f.HeaderSource)
+			}
+			seenHeader[key] = true
 			fm.HeaderFields = append(fm.HeaderFields, i)
 			continue
 		}
@@ -368,6 +398,13 @@ func extractHeaderDirective(parts []string, t reflect.Type, sf reflect.StructFie
 			if name == "" {
 				return nil, "", fmt.Errorf("field %s.%s: sov tag header= has an empty header name", t.Name(), sf.Name)
 			}
+			// The X-Sov-* namespace carries VERIFIED claims injected between
+			// trusted nodes (see gateway ClaimsFromHeaders / TrustUpstreamClaims).
+			// A user param must never bind from that channel — reject it loudly
+			// at boot so a header= can't shadow or read the claim path.
+			if strings.HasPrefix(strings.ToLower(name), "x-sov-") {
+				return nil, "", fmt.Errorf("field %s.%s: sov tag header=%q is in the reserved X-Sov-* claims namespace (verified claims travel there, not user params)", t.Name(), sf.Name, name)
+			}
 			hdr = name
 			continue
 		}
@@ -420,6 +457,90 @@ func applyFieldFlags(info *FieldInfo, opts []string, t reflect.Type, sf reflect.
 		}
 	}
 	return nil
+}
+
+// isScalarHeaderType reports whether t is a valid header= field type: a scalar
+// (string/bool/int/uint/float) or a pointer to one. Mirrors the kinds
+// setScalarFromString can bind — a header is a single string, so struct, slice,
+// and map are not header-bindable.
+func isScalarHeaderType(t reflect.Type) bool {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
+}
+
+// tagHasHeader reports whether a sov struct tag carries a header= directive.
+func tagHasHeader(sovRaw string) bool {
+	if sovRaw == "" || sovRaw == "-" {
+		return false
+	}
+	for _, tok := range splitSovTokens(sovRaw) {
+		if strings.HasPrefix(strings.TrimSpace(tok), "header=") {
+			return true
+		}
+	}
+	return false
+}
+
+// headerStructType returns the struct type reachable from t for nested-header
+// scanning: it dereferences pointers and unwraps slice/array/map element types
+// to a struct, or nil when there is no struct to descend into.
+func headerStructType(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		return t
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return headerStructType(t.Elem())
+	}
+	return nil
+}
+
+// RejectNestedHeaders fails if any struct REACHABLE from a top-level params
+// type (but not the top-level struct's own direct fields) carries a header=
+// tag. A header= is only bound on the top-level params struct; a nested one is
+// never bound AND — because nested structs are decoded by plain json.Unmarshal
+// — would be silently settable from the request body while the published schema
+// shows it absent. So it must be a boot-time error, not a live spoofing vector.
+// Callers pass the handler's params struct type.
+func RejectNestedHeaders(top reflect.Type) error {
+	seen := map[reflect.Type]bool{}
+	var visit func(t reflect.Type, isTop bool) error
+	visit = func(t reflect.Type, isTop bool) error {
+		for t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct || seen[t] {
+			return nil
+		}
+		seen[t] = true
+		for i := 0; i < t.NumField(); i++ {
+			sf := t.Field(i)
+			if sf.Name == "_" || !sf.IsExported() {
+				continue
+			}
+			if !isTop && tagHasHeader(sf.Tag.Get("sov")) {
+				return fmt.Errorf("field %s.%s: sov header= is only valid on a top-level params field, not on a nested type (a nested header field is never bound and is spoofable from the request body)", t.Name(), sf.Name)
+			}
+			if et := headerStructType(sf.Type); et != nil {
+				if err := visit(et, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return visit(top, true)
 }
 
 // snakeCase converts a Go-style identifier to snake_case. Conservative:
