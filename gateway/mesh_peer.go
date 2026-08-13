@@ -27,7 +27,7 @@ import (
 // peer's routers. To expose a node's routers as MCP tools ACROSS a boundary,
 // use registry/remote federation (JoinMesh): each node runs its own mcp
 // builtin and tags its own tool routers, and the tag federates on the
-// descriptor. In-process peer introspection merge is a known gap (HELL-289).
+// descriptor. In-process peer introspection merge is a known gap (HELL-295).
 func (g *Gateway) LinkPeer(peer *Gateway, services ...string) {
 	if peer == nil || len(services) == 0 {
 		return
@@ -60,6 +60,6 @@ func (p *peerResolver) Services() []string { return p.services }
 // Introspectables returns nil: a LinkPeer'd peer is a dispatch target, not an
 // introspection source. Merging a peer's tagged catalog in-process (so its
 // routers surface as MCP tools/explorer entries) is a known gap — see LinkPeer
-// SCOPE and HELL-289. Use registry federation to expose routers across a node
+// SCOPE and HELL-295. Use registry federation to expose routers across a node
 // boundary today.
 func (p *peerResolver) Introspectables() []string { return nil }
