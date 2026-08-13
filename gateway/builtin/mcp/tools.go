@@ -129,6 +129,9 @@ func inputSchema(md rpc.MethodDescriptor) map[string]any {
 	props := map[string]any{}
 	var required []string
 	for _, f := range md.Params {
+		if f.Source == "header" {
+			continue // header-bound: not a JSON tool argument, bound from the request header
+		}
 		props[f.JSONName] = fieldSchema(f)
 		if f.Required {
 			required = append(required, f.JSONName)

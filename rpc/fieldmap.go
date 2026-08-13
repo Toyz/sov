@@ -44,6 +44,12 @@ type FieldMap struct {
 	// parses the string. Empty when undeclared. Declaring it more than once
 	// on the sentinel is a build error.
 	Perm string
+
+	// HeaderFields lists indices into Fields that bind from a request header
+	// (FieldInfo.HeaderSource != ""), so dispatch binds them in one pass
+	// without scanning every field. Empty (nil) for the common all-body case,
+	// so the hot path pays nothing.
+	HeaderFields []int
 }
 
 // FieldInfo is the per-field resolution of the tag grammar.
@@ -56,6 +62,13 @@ type FieldInfo struct {
 	Omitempty  bool
 	Deprecated bool
 	Type       reflect.Type
+
+	// HeaderSource, when non-empty, binds this field from the named request
+	// header (sov:"header=X-Tenant-Id") instead of the request body. Such a
+	// field is NOT a body wire field: it has no WireName/Position, is excluded
+	// from ByName/ByPos and every body schema, and is bound post-decode from
+	// the context header getter. See docs/HEADER_PARAMS.md.
+	HeaderSource string
 
 	// Human-facing metadata from the sov tag `key=value` pairs. None
 	// affect dispatch — they flow into Describe(), the explorer UI,
@@ -191,64 +204,49 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 
 		if hasSov && sovRaw != "" {
 			parts := splitSovTokens(sovRaw)
-			// parts[0] = name (optional), parts[1] = position (optional), parts[2:] = flags
-			if parts[0] != "" {
-				if !snakeIdent.MatchString(parts[0]) {
-					return nil, fmt.Errorf("field %s.%s: sov tag name %q is not a valid snake_case identifier", t.Name(), sf.Name, parts[0])
-				}
-				info.WireName = parts[0]
-				explicitName = true
+			// A header= directive can appear anywhere in the tag; pull it out
+			// first. A header-bound field takes its value from a request
+			// header, not the body, so it has NO wire name/position — only
+			// flags + human metadata apply.
+			rest, hdr, herr := extractHeaderDirective(parts, t, sf)
+			if herr != nil {
+				return nil, herr
 			}
-			if len(parts) >= 2 && parts[1] != "" {
-				p, err := strconv.Atoi(parts[1])
-				if err != nil {
-					return nil, fmt.Errorf("field %s.%s: sov tag position %q is not an integer: %w", t.Name(), sf.Name, parts[1], err)
+			if hdr != "" {
+				info.HeaderSource = hdr
+				if err := applyFieldFlags(&info, rest, t, sf); err != nil {
+					return nil, err
 				}
-				if p < 0 {
-					return nil, fmt.Errorf("field %s.%s: sov tag position %d must be >= 0", t.Name(), sf.Name, p)
+				// A field is body OR header, never both: an explicit json/sov
+				// wire name alongside header= is ambiguous.
+				if jt, ok := sf.Tag.Lookup("json"); ok {
+					if jn, _, _ := strings.Cut(jt, ","); jn != "" && jn != "-" {
+						return nil, fmt.Errorf("field %s.%s: header= field must not also declare a json wire name %q (a field is body OR header, not both)", t.Name(), sf.Name, jn)
+					}
 				}
-				info.Position = p
-				explicitPos = true
-			}
-			if len(parts) > 2 {
-				seenKV := map[string]bool{}
-				for _, opt := range parts[2:] {
-					opt = strings.TrimSpace(opt)
-					switch opt {
-					case "":
-						// allow trailing comma
-					case "omitempty":
-						info.Omitempty = true
-					case "required":
-						info.Required = true
-					case "deprecated":
-						info.Deprecated = true
-					default:
-						if i := strings.IndexByte(opt, '='); i > 0 {
-							key := opt[:i]
-							value := opt[i+1:]
-							if value == "" {
-								return nil, fmt.Errorf("field %s.%s: empty value for sov tag key %q", t.Name(), sf.Name, key)
-							}
-							if seenKV[key] {
-								return nil, fmt.Errorf("field %s.%s: duplicate sov tag key %q", t.Name(), sf.Name, key)
-							}
-							seenKV[key] = true
-							switch key {
-							case "title":
-								info.Title = value
-							case "desc":
-								info.Desc = value
-							case "doc":
-								info.Doc = value
-							case "example":
-								info.Example = value
-							default:
-								return nil, fmt.Errorf("field %s.%s: unknown sov tag key %q (allowed: title, desc, doc, example)", t.Name(), sf.Name, key)
-							}
-							continue
-						}
-						return nil, fmt.Errorf("field %s.%s: unknown sov tag option %q (flags: omitempty, required, deprecated; kv: title=, desc=, doc=, example=)", t.Name(), sf.Name, opt)
+			} else {
+				// parts[0] = name (optional), parts[1] = position (optional), parts[2:] = flags
+				if parts[0] != "" {
+					if !snakeIdent.MatchString(parts[0]) {
+						return nil, fmt.Errorf("field %s.%s: sov tag name %q is not a valid snake_case identifier", t.Name(), sf.Name, parts[0])
+					}
+					info.WireName = parts[0]
+					explicitName = true
+				}
+				if len(parts) >= 2 && parts[1] != "" {
+					p, err := strconv.Atoi(parts[1])
+					if err != nil {
+						return nil, fmt.Errorf("field %s.%s: sov tag position %q is not an integer: %w", t.Name(), sf.Name, parts[1], err)
+					}
+					if p < 0 {
+						return nil, fmt.Errorf("field %s.%s: sov tag position %d must be >= 0", t.Name(), sf.Name, p)
+					}
+					info.Position = p
+					explicitPos = true
+				}
+				if len(parts) > 2 {
+					if err := applyFieldFlags(&info, parts[2:], t, sf); err != nil {
+						return nil, err
 					}
 				}
 			}
@@ -258,8 +256,8 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 			return nil, fmt.Errorf("field %s.%s: sov tag has both 'required' and 'omitempty' — pick one", t.Name(), sf.Name)
 		}
 
-		// JSON tag fallback for wire name.
-		if !explicitName {
+		// JSON tag fallback for wire name. Header fields have no wire name.
+		if !explicitName && info.HeaderSource == "" {
 			if jt, ok := sf.Tag.Lookup("json"); ok {
 				jname := strings.Split(jt, ",")[0]
 				if jname == "-" {
@@ -279,8 +277,9 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 			}
 		}
 
-		// Snake-case the Go field name if no explicit wire name.
-		if !explicitName {
+		// Snake-case the Go field name if no explicit wire name. Header
+		// fields are not body wire fields, so they get no name.
+		if !explicitName && info.HeaderSource == "" {
 			info.WireName = snakeCase(sf.Name)
 		}
 
@@ -309,8 +308,14 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 		fm.Fields[i].Position = i
 	}
 
-	// Build ByName + ByPos with validation.
+	// Build ByName + ByPos with validation. Header fields are bound from a
+	// request header, not the body, so they are collected into HeaderFields
+	// and kept OUT of the body wire maps.
 	for i, f := range fm.Fields {
+		if f.HeaderSource != "" {
+			fm.HeaderFields = append(fm.HeaderFields, i)
+			continue
+		}
 		if _, dup := fm.ByName[f.WireName]; dup {
 			return nil, fmt.Errorf("field %s.%s: duplicate wire name %q", t.Name(), f.GoName, f.WireName)
 		}
@@ -346,6 +351,75 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 	}
 
 	return fm, nil
+}
+
+// extractHeaderDirective pulls a header=NAME token out of the sov tag parts,
+// returning the remaining tokens and the header name ("" if none). A field is
+// body-bound unless it carries header=. Declaring header= twice, or with an
+// empty name, is a build error.
+func extractHeaderDirective(parts []string, t reflect.Type, sf reflect.StructField) ([]string, string, error) {
+	hdr := ""
+	rest := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if name, ok := strings.CutPrefix(strings.TrimSpace(p), "header="); ok {
+			if hdr != "" {
+				return nil, "", fmt.Errorf("field %s.%s: sov tag declares header= more than once", t.Name(), sf.Name)
+			}
+			if name == "" {
+				return nil, "", fmt.Errorf("field %s.%s: sov tag header= has an empty header name", t.Name(), sf.Name)
+			}
+			hdr = name
+			continue
+		}
+		rest = append(rest, p)
+	}
+	return rest, hdr, nil
+}
+
+// applyFieldFlags parses the flag/kv tail of a sov tag (omitempty, required,
+// deprecated; title=, desc=, doc=, example=) onto info. Shared by the body
+// form (name,pos,FLAGS) and the header form (header=,FLAGS).
+func applyFieldFlags(info *FieldInfo, opts []string, t reflect.Type, sf reflect.StructField) error {
+	seenKV := map[string]bool{}
+	for _, opt := range opts {
+		opt = strings.TrimSpace(opt)
+		switch opt {
+		case "":
+			// allow trailing comma
+		case "omitempty":
+			info.Omitempty = true
+		case "required":
+			info.Required = true
+		case "deprecated":
+			info.Deprecated = true
+		default:
+			i := strings.IndexByte(opt, '=')
+			if i <= 0 {
+				return fmt.Errorf("field %s.%s: unknown sov tag option %q (flags: omitempty, required, deprecated; kv: title=, desc=, doc=, example=)", t.Name(), sf.Name, opt)
+			}
+			key, value := opt[:i], opt[i+1:]
+			if value == "" {
+				return fmt.Errorf("field %s.%s: empty value for sov tag key %q", t.Name(), sf.Name, key)
+			}
+			if seenKV[key] {
+				return fmt.Errorf("field %s.%s: duplicate sov tag key %q", t.Name(), sf.Name, key)
+			}
+			seenKV[key] = true
+			switch key {
+			case "title":
+				info.Title = value
+			case "desc":
+				info.Desc = value
+			case "doc":
+				info.Doc = value
+			case "example":
+				info.Example = value
+			default:
+				return fmt.Errorf("field %s.%s: unknown sov tag key %q (allowed: title, desc, doc, example)", t.Name(), sf.Name, key)
+			}
+		}
+	}
+	return nil
 }
 
 // snakeCase converts a Go-style identifier to snake_case. Conservative:

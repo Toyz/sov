@@ -1,6 +1,6 @@
-# Header-bound params (design)
+# Header-bound params
 
-Status: DESIGN — not implemented. Proposed for a branch off `feat/mesh-core`.
+Status: IMPLEMENTED on `feat/header-params` (off `feat/mesh-core`).
 
 Bind a param struct field from a request **header** instead of the request
 body:
@@ -142,27 +142,33 @@ Docs for the feature must state this at the top, not in a footnote.
 - Structs/slices/maps from a header — OUT of scope. A header is a single
   scalar-ish string; complex shapes stay body fields.
 
-## Non-goals / open questions
+## Decisions (resolved)
 
-- `from=query:` / `from=path:` — deliberately not in the tag now. The chosen
-  syntax is the literal `header=NAME`; a generalized `from=<src>:<name>` is a
-  future call if more sources appear.
-- Optional-and-unparseable: does a bad scalar in a NON-required header error, or
-  silently zero? Leaning error (fail loud), but it is a decision.
-- Multi-value headers: `Header` is comma-joined today; a header-param binds the
-  joined string. No `[]string` split in MVP.
-- Response headers (binding OUT) — not this feature. This is inbound only.
+- **Optional-and-unparseable fails loud.** An ABSENT optional header leaves the
+  zero value; a PRESENT header that fails to parse to the field's scalar type is
+  a `BadRequest` (400) whether or not the field is `required`. A malformed value
+  the caller DID send is an error, not a silent zero.
+- **Multi-value headers** bind the comma-joined string (`Header` is comma-joined
+  today). No `[]string` split.
+- **`from=query:` / `from=path:`** are deliberately not in the tag. The syntax is
+  the literal `header=NAME`; a generalized `from=<src>:<name>` is a future call
+  if more sources appear.
+- **Response headers (binding OUT)** are not this feature — inbound only.
 
-## Phased implementation (when approved)
+## Implementation map
 
-1. `fieldmap.go` tag parse + `FieldInfo.HeaderSource`; build-error on
-   `header=` + `json:` collision. Unit tests on the field map.
-2. rpc dispatch `bindHeaderFields` pass + `rpc.CtxHeaderGetter` / `HeaderGetter`
-   contract. Engine-level bind tests (string + scalar + required-absent).
-3. gateway `dispatchLocal` sets the getter. Local end-to-end test; mesh test
-   proving the header binds across a remote hop.
-4. `ParamField.Source`/`Header` + introspect/`inputSchema` exclusion; MCP tool
-   schema honesty test (header field absent from `inputSchema`, still binds from
-   the forwarded header).
-5. Codegen: omit header fields from body types; doc the interceptor pattern.
-6. `docs/` usage section + the security caveat up top.
+- Tag parse + `FieldInfo.HeaderSource` + `FieldMap.HeaderFields`; build-error on
+  `header=` + `json:` collision and on an empty header name — `rpc/fieldmap.go`.
+- Bind pass + `rpc.CtxHeaderGetter` / `HeaderGetter` contract + scalar coercion —
+  `rpc/header.go`; called from both the reflect path (`rpc/dispatch.go`) and the
+  reflection-free `Handle` fast path (`rpc/handle.go`, gated on `HeaderFields`).
+- Gateway populates the getter in `dispatchLocal` — `gateway/dispatch.go`.
+- `ParamField.Source`/`Header` (`rpc/descriptor.go`), set in
+  `describeFieldMap` (`rpc/schema.go`); excluded from MCP `inputSchema`
+  (`gateway/builtin/mcp/tools.go`), from the type catalog / all descriptor-based
+  codegen (`gateway/typecatalog.go` `withoutHeaderParams`), and from the
+  explorer's live TS render (`rpc/tsrender/render.go`).
+
+Tests: `rpc/header_test.go` (field map, reflect + Handle bind, scalar/required),
+`gateway/header_param_test.go` (end-to-end + LinkPeer mesh hop),
+`gateway/builtin/mcp/mcp_test.go` (schema exclusion + bound-from-forwarded-header).

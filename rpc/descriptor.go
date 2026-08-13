@@ -33,6 +33,14 @@ type ParamField struct {
 	Desc    string `json:"desc,omitempty"`
 	Doc     string `json:"doc,omitempty"`
 	Example string `json:"example,omitempty"`
+
+	// Source names where this field's value comes from: "" (default) is the
+	// request body (codec-decoded); "header" means the request header named by
+	// Header. A header field is NOT part of the body/args schema — it must be
+	// excluded from MCP inputSchema, OpenAPI request bodies, and generated body
+	// types. See docs/HEADER_PARAMS.md.
+	Source string `json:"source,omitempty"`
+	Header string `json:"header,omitempty"`
 }
 
 // MethodDescriptor is one exported router method.

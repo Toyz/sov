@@ -46,6 +46,14 @@ func Handle[P any, R any](e *Engine, router, method string, fn func(ctx *Context
 			if derr := codec.DecodeParams(body, &p, fm); derr != nil {
 				return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
 			}
+			// Header-sourced fields bind after the body decode. Gate on the
+			// precomputed slice so the reflection-free fast path stays
+			// alloc-free when the params struct has no header= fields.
+			if len(fm.HeaderFields) > 0 {
+				if herr := bindHeaderFields(reflect.ValueOf(&p), fm, ctx); herr != nil {
+					return encodeErrorWith(codec, herr)
+				}
+			}
 		}
 		r, err := fn(ctx, &p)
 		if err != nil {
@@ -80,6 +88,14 @@ func HandleErr[P any](e *Engine, router, method string, fn func(ctx *Context, p 
 		if hasParams {
 			if derr := codec.DecodeParams(body, &p, fm); derr != nil {
 				return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
+			}
+			// Header-sourced fields bind after the body decode. Gate on the
+			// precomputed slice so the reflection-free fast path stays
+			// alloc-free when the params struct has no header= fields.
+			if len(fm.HeaderFields) > 0 {
+				if herr := bindHeaderFields(reflect.ValueOf(&p), fm, ctx); herr != nil {
+					return encodeErrorWith(codec, herr)
+				}
 			}
 		}
 		if err := fn(ctx, &p); err != nil {

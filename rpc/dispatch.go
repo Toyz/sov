@@ -43,6 +43,12 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 		if derr := codec.DecodeParams(body, ptr.Interface(), entry.fieldMap); derr != nil {
 			return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
 		}
+		// Header-sourced fields bind AFTER the codec decodes the body (they
+		// are not body fields). No-op unless the params struct has header=
+		// fields.
+		if herr := bindHeaderFields(ptr, entry.fieldMap, ctx); herr != nil {
+			return encodeErrorWith(codec, herr)
+		}
 		args = append(args, ptr)
 		paramPtr = ptr.Interface()
 	}

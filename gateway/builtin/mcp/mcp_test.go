@@ -105,7 +105,9 @@ type readParams struct {
 	ID string `json:"id"`
 }
 
-func (NoteToolsRouter) Read(ctx *rpc.Context, p *readParams) (string, error) { return "note:" + p.ID, nil }
+func (NoteToolsRouter) Read(ctx *rpc.Context, p *readParams) (string, error) {
+	return "note:" + p.ID, nil
+}
 
 // PlainRouter does NOT embed mcp.Tool → never surfaces as a tool.
 type PlainRouter struct{}
@@ -386,5 +388,66 @@ func TestMCP_RegisterAfterWarmInvalidatesCatalog(t *testing.T) {
 	after := toolNames(mcpPost(t, gw, "", "tools/list", map[string]any{}))
 	if !after["LaterTool.fetch"] {
 		t.Fatalf("tool registered after warm not surfaced (catalog not invalidated): %v", after)
+	}
+}
+
+// TenantToolRouter has a header-bound param. It must not appear as a JSON tool
+// argument (an LLM can't set an HTTP header via arguments), but it MUST bind
+// from the MCP client's own forwarded header on tools/call.
+type TenantToolRouter struct{ mcp.Tool }
+
+type tenantToolParams struct {
+	Note   string `json:"note"`
+	Tenant string `sov:"header=X-Tenant-Id"`
+}
+
+func (TenantToolRouter) Stamp(_ *rpc.Context, p *tenantToolParams) (string, error) {
+	return p.Note + "@" + p.Tenant, nil
+}
+
+func toolInputProps(out map[string]any, name string) map[string]any {
+	res, _ := out["result"].(map[string]any)
+	tools, _ := res["tools"].([]any)
+	for _, tv := range tools {
+		tm, _ := tv.(map[string]any)
+		if tm["name"] == name {
+			sch, _ := tm["inputSchema"].(map[string]any)
+			props, _ := sch["properties"].(map[string]any)
+			return props
+		}
+	}
+	return nil
+}
+
+func TestMCP_HeaderParamExcludedFromSchemaButBound(t *testing.T) {
+	gw := gateway.New()
+	gw.Register(&TenantToolRouter{})
+	gw.MustUse(mcp.New())
+
+	// tools/list: the header field is NOT a JSON argument; the body field is.
+	props := toolInputProps(mcpPost(t, gw, "", "tools/list", map[string]any{}), "TenantTool.stamp")
+	if props == nil {
+		t.Fatalf("TenantTool.stamp missing from tools/list")
+	}
+	if _, ok := props["tenant"]; ok {
+		t.Fatalf("header param leaked into tool inputSchema: %v", props)
+	}
+	if _, ok := props["note"]; !ok {
+		t.Fatalf("body param 'note' missing from inputSchema: %v", props)
+	}
+
+	// tools/call: the header binds from the MCP client's forwarded header.
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": "TenantTool.stamp", "arguments": map[string]any{"note": "hi"}}})
+	hdr := gateway.Header{}
+	hdr.Set("X-Tenant-Id", "acme")
+	resp := gw.Handle(context.Background(), &gateway.Request{
+		Method: http.MethodPost, Path: "/mcp", Header: hdr, Body: body,
+	})
+	if resp.Status != http.StatusOK {
+		t.Fatalf("tools/call status=%d body=%s", resp.Status, resp.Body)
+	}
+	if !strings.Contains(string(resp.Body), "hi@acme") {
+		t.Fatalf("header param not bound through the MCP surface: %s", resp.Body)
 	}
 }

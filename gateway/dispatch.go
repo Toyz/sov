@@ -259,6 +259,9 @@ func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req 
 	}
 	rc.Set(ContextKeyRemoteIP, req.RemoteIP)
 	rc.Set(ContextKeyPath, req.Path)
+	// Expose inbound headers to the engine's header= param binding
+	// (rpc.CtxHeaderGetter). Header.Get is case-insensitive and nil-safe.
+	rc.Set(rpc.CtxHeaderGetter, rpc.HeaderGetter(req.Header.Get))
 	// Stash the inbound Authorization header so handlers can forward it
 	// on cross-service calls (e.g. mesh-mode FeedRouter calling back
 	// through the central gateway). The gateway has already validated
