@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,64 @@ import (
 	"github.com/Toyz/sov/gateway/builtin/mcp"
 	"github.com/Toyz/sov/rpc"
 )
+
+// recordHook is a DispatchHook that captures per-call events.
+type recordHook struct {
+	mu     sync.Mutex
+	events []gateway.DispatchEvent
+}
+
+func (*recordHook) PluginName() string { return "recordhook" }
+func (r *recordHook) OnDispatch(ev gateway.DispatchEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+	return nil
+}
+func (r *recordHook) get(router, method string) (gateway.DispatchEvent, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ev := range r.events {
+		if ev.Router == router && ev.Method == method {
+			return ev, true
+		}
+	}
+	return gateway.DispatchEvent{}, false
+}
+
+// denyAuthz refuses every request — to prove a denied MCP tool call is recorded.
+type denyAuthz struct{}
+
+func (denyAuthz) Check(_ *rpc.Context, _ *gateway.CheckParams) (*gateway.AuthzDecision, error) {
+	return &gateway.AuthzDecision{Allow: false, Reason: "nope"}, nil
+}
+
+// MCP tools/call must emit a DispatchHook event per call — with the resolved
+// router/method/status — so audit/metrics see it (and authz DENIALS) exactly as
+// they see a /rpc call, not just an opaque /mcp POST.
+func TestMCP_ToolCallEmitsDispatchEvent(t *testing.T) {
+	gw := gateway.New()
+	gw.Register(&NoteToolsRouter{})
+	rec := &recordHook{}
+	gw.MustUse(rec)
+	gw.MustUse(mcp.New())
+	mcpPost(t, gw, "", "tools/call", map[string]any{"name": "NoteTools.read", "arguments": map[string]any{"id": "9"}})
+	if ev, ok := rec.get("NoteTools", "read"); !ok || ev.Status != http.StatusOK {
+		t.Fatalf("expected 200 dispatch event for NoteTools.read: %+v", rec.events)
+	}
+
+	// authz-denied path is recorded too (the key forensic gap).
+	gwd := gateway.New()
+	gwd.Register(&NoteToolsRouter{})
+	gwd.RegisterAuthz(&denyAuthz{})
+	recd := &recordHook{}
+	gwd.MustUse(recd)
+	gwd.MustUse(mcp.New())
+	mcpPost(t, gwd, "", "tools/call", map[string]any{"name": "NoteTools.read", "arguments": map[string]any{"id": "9"}})
+	if ev, ok := recd.get("NoteTools", "read"); !ok || ev.Status != http.StatusForbidden {
+		t.Fatalf("denied tool call should record a 403 dispatch event: %+v", recd.events)
+	}
+}
 
 // ---- test routers ---------------------------------------------------------
 

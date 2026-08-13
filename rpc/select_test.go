@@ -62,24 +62,32 @@ type hoParams struct {
 }
 
 // A router registered purely via rpc.Handle has typed closures with NO receiver
-// struct. Select/Find/RouterValue must exclude it (nothing to type-assert a
-// capability against), not panic on the zero reflect.Value.
-func TestSelect_HandleOnlyRouterExcludedNoPanic(t *testing.T) {
+// struct. It must appear in Select/Find (it IS served over /rpc) with a nil
+// Value — never panic on the zero reflect.Value — while capability filters
+// (Implements) and RouterValue correctly exclude it.
+func TestSelect_HandleOnlyRouterNoPanic(t *testing.T) {
 	e := rpc.NewEngine()
 	rpc.Handle(e, "HandleOnly", "ping", func(_ *rpc.Context, _ *hoParams) (string, error) { return "ok", nil })
 	e.Register(&AlphaRouter{})
 
 	all := e.Select(func(rpc.RouterInfo) bool { return true }) // must not panic
-	for _, ri := range all {
-		if ri.Name == "HandleOnly" {
-			t.Fatalf("Handle-only router should be excluded from Select: %+v", all)
+	var ho *rpc.RouterInfo
+	for i := range all {
+		if all[i].Name == "HandleOnly" {
+			ho = &all[i]
 		}
+	}
+	if ho == nil {
+		t.Fatalf("Handle-only router should appear in Select (it is served over /rpc): %+v", all)
+	}
+	if ho.Value != nil || ho.TypeName != "" {
+		t.Fatalf("Handle-only RouterInfo should carry nil Value / empty TypeName: %+v", *ho)
+	}
+	if got := e.Find(rpc.Implements[marker]()); len(got) != 1 || got[0].Name != "Alpha" {
+		t.Fatalf("Implements[marker] should match only Alpha (Handle-only has no receiver): %+v", got)
 	}
 	if _, ok := e.RouterValue("HandleOnly"); ok {
 		t.Fatal("RouterValue(HandleOnly) should be false — no receiver")
-	}
-	if got := e.Find(rpc.Implements[marker]()); len(got) != 1 || got[0].Name != "Alpha" {
-		t.Fatalf("Alpha still findable, HandleOnly not: %+v", got)
 	}
 }
 

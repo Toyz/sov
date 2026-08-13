@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/rpc"
@@ -187,12 +188,18 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 	if router == "" {
 		return nil, &jsonRPCError{code: -32602, msg: "unknown tool: " + tc.Name}
 	}
+	path := "/rpc/" + router + "/" + method
+	started := time.Now()
 
 	// Same authz/perm gate /rpc applies; claims were resolved on the /mcp
-	// request by the auth middleware, so reuse them (no re-verify).
+	// request by the auth middleware, so reuse them (no re-verify). Record the
+	// dispatch event on BOTH paths so audit/metrics see the tool call — and,
+	// critically, authz DENIALS — exactly as they see a /rpc call.
 	claims, _ := mcpReq.User.(*gateway.Claims)
 	if err := p.gw.Authorize(ctx, claims, router, method, mcpReq.Header); err != nil {
-		return toolResult(gateway.ErrorResponseFromAny(err)), nil
+		resp := gateway.ErrorResponseFromAny(err)
+		p.gw.RecordDispatch(mcpReq, router, method, path, resp, started)
+		return toolResult(resp), nil
 	}
 
 	args := tc.Arguments
@@ -207,13 +214,15 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 	hdr.Set("Content-Type", "application/json")
 	sub := &gateway.Request{
 		Method:   http.MethodPost,
-		Path:     "/rpc/" + router + "/" + method,
+		Path:     path,
 		Header:   hdr,
 		Body:     body,
 		User:     mcpReq.User, // verified claims flow to the handler / remote hop
 		RemoteIP: mcpReq.RemoteIP,
 	}
-	return toolResult(p.gw.Dispatch(ctx, sub)), nil
+	resp := p.gw.Dispatch(ctx, sub)
+	p.gw.RecordDispatch(sub, router, method, path, resp, started)
+	return toolResult(resp), nil
 }
 
 // toolResult wraps an RPC response as an MCP tool result. The raw

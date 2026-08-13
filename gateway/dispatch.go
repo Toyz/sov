@@ -43,13 +43,7 @@ func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 	// router/method/status. Framework endpoints get an empty
 	// router/method so hooks can filter by Path.
 	router, method, _ := rpc.SplitRPCPath(req.Path)
-	subject := ""
-	if s, ok := req.User.(string); ok {
-		subject = s
-	} else if c, ok := req.User.(*Claims); ok && c != nil {
-		subject = c.Subject
-	}
-	g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subject, errCodeFromBody(resp.Body), "", resp.Mode)
+	g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode)
 	return resp
 }
 
@@ -84,6 +78,32 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 	// simply doesn't speak the /rpc surface — the Dispatch fabric still serves
 	// other surfaces (MCP) over the same registered routers.
 	return ErrorResponse(rpc.NotFound("no surface for %q — register a surface plugin (e.g. rpc.New())", req.Path))
+}
+
+// subjectOf returns the authenticated subject the auth middleware stamped onto
+// req (a subject string or *Claims), or "" for an anonymous request.
+func subjectOf(req *Request) string {
+	switch u := req.User.(type) {
+	case string:
+		return u
+	case *Claims:
+		if u != nil {
+			return u.Subject
+		}
+	}
+	return ""
+}
+
+// RecordDispatch emits a DispatchHook event (audit, metrics) for a call a
+// surface dispatched OUTSIDE the /rpc HTTP path — an MCP tools/call, say — so
+// observability plugins see per-call router/method/status/subject just as they
+// do for /rpc, instead of only the opaque outer request. Status, error code, and
+// Mode are read from resp; subject from req. No-op when resp is nil.
+func (g *Gateway) RecordDispatch(req *Request, router, method, path string, resp *Response, started time.Time) {
+	if resp == nil {
+		return
+	}
+	g.recordDispatchEventWithMode(router, method, path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode)
 }
 
 // runPluginRoute invokes a plugin route's handler, stamping ModePlugin when the
@@ -162,8 +182,13 @@ func (g *Gateway) Dispatch(ctx context.Context, req *Request) *Response {
 
 // DispatchResolved is Dispatch for a caller that has ALREADY parsed req.Path into
 // router + method — the rpc surface, for one, parses to apply its POST/reserved
-// policy, so it hands the parts straight here instead of re-splitting. router and
-// method must be the split of req.Path. See Dispatch for the routing semantics.
+// policy, so it hands the parts straight here instead of re-splitting.
+//
+// INVARIANT: router and method MUST equal SplitRPCPath(req.Path). Dispatch
+// resolves and dispatches by the router/method ARGUMENTS, but dispatchLocal
+// stashes req.Path verbatim as ContextKeyPath — pass mismatched values and a
+// handler (or an audit/tenant plugin) reading ctx path sees a lie. Callers that
+// haven't parsed the path should use Dispatch. See Dispatch for routing.
 func (g *Gateway) DispatchResolved(ctx context.Context, req *Request, router, method string) *Response {
 	endpoint, ok := g.resolver.Resolve(ctx, router)
 	if !ok {

@@ -66,6 +66,11 @@ func New() *Plugin { return &Plugin{} }
 
 func (h *Plugin) PluginName() string { return "batchstream" }
 
+// Requires the rpc surface: each entry fans out through gw.Handle to
+// /rpc/{service}/{method}, so without the rpc builtin every entry 404s. Fail
+// fast at boot instead of per-entry at request time.
+func (h *Plugin) Requires() []string { return []string{"rpc"} }
+
 func (h *Plugin) Doc() string {
 	return "Streaming /rpc/_batchstream — dispatches batch entries concurrently and emits each result as NDJSON the moment it resolves, so a fast call never waits on a slow sibling (avoids the all-or-nothing head-of-line blocking of /rpc/_batch)."
 }

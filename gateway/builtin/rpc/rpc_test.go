@@ -16,6 +16,10 @@ type MarkedRouter struct{ rpc.Served }
 
 func (MarkedRouter) Ping(_ *sovrpc.Context) (string, error) { return "pong", nil }
 
+type dangerParams struct {
+	X string `json:"x"`
+}
+
 // PlainRouter carries no marker.
 type PlainRouter struct{}
 
@@ -56,6 +60,15 @@ func TestRPC_RequireMarker(t *testing.T) {
 	}
 	if resp := call(gw, "/rpc/Plain/ping"); resp.Status != http.StatusNotFound {
 		t.Fatalf("unmarked should 404 in strict mode: %d %s", resp.Status, resp.Body)
+	}
+
+	// A Handle-only router can never embed rpc.Served — it must 404 in strict
+	// mode, not slip through because RouterValue reports no receiver.
+	sovrpc.Handle(gw.Engine(), "Danger", "ping", func(_ *sovrpc.Context, _ *dangerParams) (string, error) {
+		return "should-not-be-reachable", nil
+	})
+	if resp := call(gw, "/rpc/Danger/ping"); resp.Status != http.StatusNotFound {
+		t.Fatalf("Handle-only router must 404 under RequireMarker, got %d: %s", resp.Status, resp.Body)
 	}
 }
 

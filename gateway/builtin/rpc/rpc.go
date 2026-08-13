@@ -105,10 +105,11 @@ func (p *Plugin) ContributeIntrospect(_ context.Context, report *gateway.Introsp
 	return nil
 }
 
-// RoutePatterns claims the /rpc/ subtree. Framework endpoints (/rpc/_health,
-// _introspect, _batch, _register) are handled by core before plugin routes, and
-// more-specific plugin routes (/rpc/_explorer/) win by longest-match — so this
-// broad claim only receives genuine /rpc/{router}/{method} business calls.
+// RoutePatterns claims the /rpc/ subtree. Core framework endpoints (/rpc/_health,
+// /rpc/_introspect) are handled before plugin routes; other /rpc/_* paths are
+// owned by MORE-SPECIFIC plugin RouteHandlers (batch at /rpc/_batch, registry at
+// /rpc/_register, explorer at /rpc/_explorer/) that win by longest-match — so
+// this broad claim only receives genuine /rpc/{router}/{method} business calls.
 func (p *Plugin) RoutePatterns() []string { return []string{"/rpc/"} }
 
 // ServeRoute is the /rpc surface handler: enforce POST + the reserved-name
@@ -128,13 +129,15 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 	if len(method) > 0 && method[0] == '_' {
 		return gateway.ErrorResponse(sovrpc.NotFound("method %q is internal-network only", method))
 	}
-	// Strict mode: a LOCAL router must embed rpc.Served. A name not in the local
-	// engine is remote (or genuinely unregistered) — let Dispatch proxy or 404.
-	if p.cfg.RequireMarker {
-		if v, ok := p.gw.Engine().RouterValue(router); ok {
-			if _, marked := v.(ServedRouter); !marked {
-				return gateway.ErrorResponse(sovrpc.NotFound("router %q is not exposed over rpc (embed rpc.Served)", router))
-			}
+	// Strict mode: a LOCAL router must embed rpc.Served. Gate on HasRouter, not
+	// RouterValue's ok — a Handle-only router IS local (HasRouter true) but has
+	// no receiver (RouterValue nil), and can NEVER embed rpc.Served, so it must
+	// 404, not slip through. A name not registered locally is remote — let
+	// Dispatch proxy it; its home node enforces its own marker.
+	if p.cfg.RequireMarker && p.gw.Engine().HasRouter(router) {
+		v, _ := p.gw.Engine().RouterValue(router) // nil for a Handle-only router
+		if _, marked := v.(ServedRouter); !marked {
+			return gateway.ErrorResponse(sovrpc.NotFound("router %q is not exposed over rpc (embed rpc.Served)", router))
 		}
 	}
 	// We already split req.Path above for the policy checks; hand the parts to

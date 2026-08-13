@@ -7,10 +7,15 @@ import "reflect"
 // registered), so a predicate can match on the wire Name, the Go TypeName,
 // OR a type assertion to a marker interface — the registry is queryable by
 // name or by capability, whichever the consumer needs.
+//
+// A router registered purely via rpc.Handle has no receiver struct: Value is
+// nil and TypeName is "". It still appears in Select/Find (it IS a registered
+// router, served over /rpc), so name/type predicates see it; a capability
+// assertion on a nil Value is false, so Implements[T] correctly excludes it.
 type RouterInfo struct {
 	Name     string // wire name — the /rpc/{router} dispatch segment
-	TypeName string // Go struct type name, e.g. "NoteToolsRouter"
-	Value    any    // the registered instance (pointer, as registered)
+	TypeName string // Go struct type name; "" for a Handle-only router
+	Value    any    // the registered instance; nil for a Handle-only router
 }
 
 // Select returns every registered router whose RouterInfo satisfies pred, in
@@ -57,19 +62,26 @@ func (e *Engine) RouterValue(name string) (any, bool) {
 	return rv.Interface(), true
 }
 
-// routerInfoLocked builds the RouterInfo for a registered router name. Caller
-// holds e.mu (read). ok=false when the name is unregistered or carries no
-// methods to recover an instance from.
+// routerInfoLocked builds the RouterInfo for a registered router name. ok=false
+// only when the name is not a registered router at all. A registered router with
+// no receiver (Handle-only) still yields a RouterInfo — Name set, TypeName ""
+// and Value nil — so it participates in name/type queries and surface tagging
+// even though it can't satisfy a capability assertion. Caller holds e.mu (read).
 func (e *Engine) routerInfoLocked(name string) (RouterInfo, bool) {
-	rv, ok := e.receiverLocked(name)
-	if !ok {
+	methods, ok := e.routers[name]
+	if !ok || len(methods) == 0 {
 		return RouterInfo{}, false
 	}
-	rt := rv.Type()
-	if rt.Kind() == reflect.Ptr {
-		rt = rt.Elem()
+	ri := RouterInfo{Name: name}
+	if rv, hasReceiver := e.receiverLocked(name); hasReceiver {
+		rt := rv.Type()
+		if rt.Kind() == reflect.Ptr {
+			rt = rt.Elem()
+		}
+		ri.TypeName = rt.Name()
+		ri.Value = rv.Interface()
 	}
-	return RouterInfo{Name: name, TypeName: rt.Name(), Value: rv.Interface()}, true
+	return ri, true
 }
 
 // receiverLocked recovers the registered receiver value for a router. A router
@@ -77,9 +89,9 @@ func (e *Engine) routerInfoLocked(name string) (RouterInfo, bool) {
 // methodEntry, but a router registered purely via rpc.Handle has typed closures
 // with NO receiver struct (me.router is the zero Value). Skip those and return
 // the first VALID receiver; if none exists — a Handle-only router — return
-// ok=false, so Select/Find/RouterValue exclude it (there is no instance to
-// type-assert a marker interface against) instead of panicking on a zero Value.
-// Caller holds e.mu (read).
+// ok=false so callers get a nil Value (RouterValue reports ok=false;
+// routerInfoLocked yields a receiver-less RouterInfo) instead of panicking on a
+// zero reflect.Value. Caller holds e.mu (read).
 func (e *Engine) receiverLocked(name string) (reflect.Value, bool) {
 	for _, me := range e.routers[name] {
 		if me.router.IsValid() {

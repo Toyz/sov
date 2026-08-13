@@ -100,9 +100,10 @@ type jsonReq struct {
 var jsonHeader = gateway.Header{"Content-Type": "application/json"}
 
 // ServeRoute handles one JSON-RPC POST: parse, route the MCP method, envelope
-// the reply. Auth is NOT enforced here — it is enforced per tools/call when
-// that call re-dispatches through gw.Handle, so listing is open but calling
-// is gated exactly like /rpc.
+// the reply. Auth is NOT enforced here — it is enforced per tools/call, which
+// calls gw.Authorize then gw.Dispatch (and emits a dispatch event via
+// RecordDispatch for audit/metrics), so listing is open but calling is gated —
+// and observed — exactly like /rpc.
 func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.Response {
 	if req.Method != http.MethodPost {
 		return &gateway.Response{Status: http.StatusMethodNotAllowed, Header: gateway.Header{"Allow": "POST"}}

@@ -72,6 +72,11 @@ func New(cfg Config) *Plugin {
 // PluginName surfaces in /rpc/_introspect.plugins[].
 func (p *Plugin) PluginName() string { return "batch" }
 
+// Requires the rpc surface: batch fans each entry out through gw.Handle to
+// /rpc/{service}/{method}, so without the rpc builtin every entry 404s. Fail
+// fast at boot instead of per-entry at request time.
+func (p *Plugin) Requires() []string { return []string{"rpc"} }
+
 // Doc surfaces a one-line description in /rpc/_introspect + the explorer.
 func (p *Plugin) Doc() string {
 	return "Cascading /rpc/_batch — groups calls by destination and coalesces same-pod calls into one round trip."
