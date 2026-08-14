@@ -51,6 +51,24 @@ func WithState(ctx *rpc.Context, key string, value any) *rpc.Context {
 	return ctx
 }
 
+// headerBagKey holds the rpctest-managed header map behind WithHeader.
+const headerBagKey = "rpctest.headers"
+
+// WithHeader makes value available to a handler's sov:"header=name" param (and
+// to any code reading rpc.CtxHeaderGetter). Case-insensitive, like the real
+// gateway. Call it once per header; repeated calls accumulate. Without this a
+// header-bound param binds empty and a required one 400s.
+func WithHeader(ctx *rpc.Context, name, value string) *rpc.Context {
+	bag, ok := ctx.Get(headerBagKey).(gateway.Header)
+	if !ok {
+		bag = gateway.Header{}
+		ctx.Set(headerBagKey, bag)
+		ctx.Set(rpc.CtxHeaderGetter, rpc.HeaderGetter(bag.Get))
+	}
+	bag.Set(name, value)
+	return ctx
+}
+
 // Builder is a fluent wrapper over the With* functions above — it reads
 // better in long test setups. Each method delegates to the matching free
 // function so there's a single implementation of each mutation.
@@ -86,6 +104,12 @@ func (b *Builder) WithScopes(uid string, scopes ...string) *Builder {
 // WithState sets a ctx.State key and returns the builder.
 func (b *Builder) WithState(key string, value any) *Builder {
 	WithState(b.ctx, key, value)
+	return b
+}
+
+// WithHeader makes value available to a handler's sov:"header=name" param.
+func (b *Builder) WithHeader(name, value string) *Builder {
+	WithHeader(b.ctx, name, value)
 	return b
 }
 

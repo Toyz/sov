@@ -46,6 +46,12 @@ type Engine struct {
 	// common single-codec (JSON-only) deployment. An atomic so the dispatch
 	// hot path reads it without a lock.
 	negotiable atomic.Bool
+	// needsHeaderGetter is true once any registered method declares a
+	// sov:"header=" param. The gateway checks it to skip per-request header
+	// snapshotting + getter setup in the common deployment where no method
+	// binds a header — zero added alloc for that case. Atomic: read on the
+	// dispatch hot path, set only at boot/registration.
+	needsHeaderGetter atomic.Bool
 	// logger sinks non-fatal boot warnings; nil falls back to slog.Default().
 	logger Logger
 }
@@ -108,6 +114,11 @@ func (e *Engine) RegisterCodec(c Codec) {
 // codec. False in the common JSON-only deployment, letting the transport
 // adapter skip the Content-Type parse on the hot path.
 func (e *Engine) Negotiable() bool { return e.negotiable.Load() }
+
+// NeedsHeaderGetter reports whether any registered method binds a sov:"header="
+// param. The transport skips per-request header snapshotting and stashing the
+// header getter on the context when this is false.
+func (e *Engine) NeedsHeaderGetter() bool { return e.needsHeaderGetter.Load() }
 
 // SetCodec sets the DEFAULT codec (and registers it). Back-compat with the
 // single-codec API — a request that selects no codec uses this one. Passing
@@ -419,6 +430,9 @@ func (e *Engine) Register(router any) {
 		entry := buildEntry(typeName, rv, m)
 		if entry == nil {
 			continue
+		}
+		if entry.fieldMap != nil && len(entry.fieldMap.HeaderFields) > 0 {
+			e.needsHeaderGetter.Store(true)
 		}
 		methods[entry.wireName] = entry
 	}

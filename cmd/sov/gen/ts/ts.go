@@ -190,7 +190,7 @@ func emitRouters(w io.Writer, indent string, report *gateway.IntrospectReport) {
 // generator reference a {Router}{Method}Params type that emitTypes never
 // emits — a dangling reference that won't compile. Zero fields → void.
 func methodHasParams(md rpc.MethodDescriptor) bool {
-	return md.HasParams && len(md.Params) > 0
+	return md.HasBodyParams()
 }
 
 func emitMethod(w io.Writer, indent, router string, md rpc.MethodDescriptor) {

@@ -238,7 +238,7 @@ func emitMethod(w io.Writer, router string, md rpc.MethodDescriptor) {
 		resultType = "JsonElement"
 	}
 	paramType := ktIdent(router) + strs.Capitalize(md.Method) + "Params"
-	if md.HasParams {
+	if md.HasBodyParams() {
 		fmt.Fprintf(w, "    fun %s(p: %s): %s =\n", md.Method, paramType, resultType)
 		fmt.Fprintf(w, "        c.call(%q, %q, p)\n", router, md.Method)
 	} else {

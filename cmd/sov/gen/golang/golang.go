@@ -289,7 +289,7 @@ func emitClientMethod(w io.Writer, typeName, service string, md *rpc.MethodDescr
 // generator reference a {Router}{Method}Params type that emitTypes never
 // emits — a dangling reference that won't compile. Zero fields → no arg.
 func methodHasParams(md rpc.MethodDescriptor) bool {
-	return md.HasParams && len(md.Params) > 0
+	return md.HasBodyParams()
 }
 
 func paramsArg(router string, md rpc.MethodDescriptor) string {

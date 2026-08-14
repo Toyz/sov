@@ -332,6 +332,43 @@ func TestHeaderParam_EmbeddedHeaderRejected(t *testing.T) {
 	}
 }
 
+// HasBodyParams is false for a header-only method (no body arg) and true when a
+// body field is present — the signal codegen gates the request-body argument
+// on, so a header-only method emits a no-arg call.
+func TestHeaderParam_HasBodyParams(t *testing.T) {
+	e := NewEngine()
+	e.Register(&HdrRouter{})
+	got := map[string]bool{}
+	for _, rd := range e.Describe() {
+		if rd.Router != "Hdr" {
+			continue
+		}
+		for _, m := range rd.Methods {
+			got[m.Method] = m.HasBodyParams()
+		}
+	}
+	if got["who"] {
+		t.Fatalf("who is header-only → HasBodyParams should be false")
+	}
+	if !got["mix"] {
+		t.Fatalf("mix has a body field → HasBodyParams should be true")
+	}
+}
+
+// NeedsHeaderGetter is false until a method with a header= param is registered.
+func TestHeaderParam_NeedsHeaderGetterFlag(t *testing.T) {
+	plain := NewEngine()
+	plain.Register(&DualRouter{}) // no header fields
+	if plain.NeedsHeaderGetter() {
+		t.Fatalf("engine with no header params should not NeedHeaderGetter")
+	}
+	withHdr := NewEngine()
+	withHdr.Register(&HdrRouter{})
+	if !withHdr.NeedsHeaderGetter() {
+		t.Fatalf("engine with a header param should NeedHeaderGetter")
+	}
+}
+
 type posHdrParams struct {
 	A string `json:"a"`
 	T string `sov:"header=X-Tenant-Id"`

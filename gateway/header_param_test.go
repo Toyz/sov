@@ -71,6 +71,89 @@ func TestHeaderParam_BindsAcrossLinkPeer(t *testing.T) {
 	}
 }
 
+type HeaderOnlyRouter struct{}
+
+type headerOnlyParams struct {
+	Tenant string `sov:"header=X-Tenant-Id"`
+}
+
+func (HeaderOnlyRouter) Do(_ *rpc.Context, p *headerOnlyParams) (string, error) { return p.Tenant, nil }
+
+// A method whose ONLY params are header-bound has no JSON body shape, so the
+// type catalog must not emit an (empty) Params type for it — otherwise every
+// generator forces callers to send a meaningless {} for a no-body method.
+func TestHeaderParam_HeaderOnlyMethodEmitsNoParamsType(t *testing.T) {
+	gw := gwtest.New()
+	gw.Register(&HeaderOnlyRouter{})
+	resp := gw.IntrospectBody(context.Background(), &Request{Header: Header{}})
+	var rep IntrospectReport
+	if err := json.Unmarshal(resp.Body, &rep); err != nil {
+		t.Fatalf("introspect decode: %v", err)
+	}
+	if _, ok := rep.Types["HeaderOnly.DoParams"]; ok {
+		t.Fatalf("header-only method must not create a Params type: %v", rep.Types)
+	}
+}
+
+type tenantRewriteParser struct{}
+
+func (tenantRewriteParser) PluginName() string { return "tenant-rewrite" }
+func (tenantRewriteParser) ParseHeaders(req *Request) *rpc.Error {
+	if req.Header.Get("X-Tenant-Id") == "raw-alias" {
+		req.Header.Set("X-Tenant-Id", "canonical-tenant")
+	}
+	return nil
+}
+
+type recordingHeaderAuthz struct{ seen *string }
+
+func (a recordingHeaderAuthz) Check(_ *rpc.Context, p *CheckParams) (*AuthzDecision, error) {
+	if a.seen != nil {
+		*a.seen = p.Headers["X-Tenant-Id"]
+	}
+	return &AuthzDecision{Allow: true}, nil
+}
+
+type PermTenantRouter struct{}
+
+type permTenantParams struct {
+	_      struct{} `sov:"perm=read"`
+	Note   string   `json:"note"`
+	Tenant string   `sov:"header=X-Tenant-Id"`
+}
+
+func (PermTenantRouter) Echo(_ *rpc.Context, p *permTenantParams) (string, error) {
+	return p.Note + "@" + p.Tenant, nil
+}
+
+// A HeaderParser that rewrites a header must NOT make a header= param bind a
+// different value than the authz gate (AuthzService.Check) authorized. Both see
+// the pre-parser value — closing the confused-deputy divergence. Before the
+// fix the handler bound the parser-rewritten "canonical-tenant" while Check
+// authorized "raw-alias".
+func TestHeaderParam_AuthzAndBindAgreeUnderHeaderParser(t *testing.T) {
+	var authzSaw string
+	gw := gwtest.New()
+	gw.Register(&PermTenantRouter{})
+	gw.RegisterAuthz(&recordingHeaderAuthz{seen: &authzSaw})
+	gw.MustUse(&tenantRewriteParser{})
+
+	resp := gw.Handle(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/PermTenant/echo",
+		Header: Header{"Content-Type": "application/json", "X-Tenant-Id": "raw-alias"},
+		Body:   []byte(`{"args":{"note":"hi"}}`),
+	})
+	if resp.Status != 200 {
+		t.Fatalf("status=%d body=%s", resp.Status, resp.Body)
+	}
+	if authzSaw != "raw-alias" {
+		t.Fatalf("authz saw %q, want raw-alias (pre-parser)", authzSaw)
+	}
+	if !strings.Contains(string(resp.Body), "hi@raw-alias") {
+		t.Fatalf("handler bound the parser-rewritten value, not what authz saw: %s", resp.Body)
+	}
+}
+
 // The introspection contract the explorer/codegen consume: the generated
 // request TYPE (JSON shape) omits the header field, while the METHOD params
 // keep it flagged Source="header" with its header name.

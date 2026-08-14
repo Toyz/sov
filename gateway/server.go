@@ -59,6 +59,14 @@ type Request struct {
 	// call is counted ONCE, not double — the outer /mcp event PLUS the tool
 	// event. Unexported: internal bookkeeping, not part of the wire request.
 	recorded bool
+
+	// headerSnapshot is the header state captured at gateway ingress, BEFORE
+	// HeaderParser plugins mutate req.Header. sov:"header=" params bind from it
+	// so a bound value matches what the authz gate (AuthzService.Check) saw — a
+	// HeaderParser that rewrites a header cannot make the handler's param
+	// diverge from what was authorized. nil unless a registered method uses
+	// header= params (NeedsHeaderGetter). Unexported: internal, not wire state.
+	headerSnapshot Header
 }
 
 // Response is what the RequestHandler returns. Server writes it back.

@@ -228,7 +228,7 @@ func emitMethod(w io.Writer, router string, md rpc.MethodDescriptor) {
 		respHint = resp
 	}
 	paramType := pyIdent(router) + strs.Capitalize(md.Method) + "Params"
-	if md.HasParams {
+	if md.HasBodyParams() {
 		fmt.Fprintf(w, "    def %s(self, p: %s) -> %s:\n", pyMethodIdent(md.Method), paramType, respHint)
 		fmt.Fprintf(w, "        return self._c.call(%q, %q, p)\n", router, md.Method)
 	} else {

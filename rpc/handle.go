@@ -141,6 +141,9 @@ func (e *Engine) registerTyped(router, method string, entry *methodEntry) {
 	if _, dup := methods[method]; dup {
 		panic("rpc.Handle: " + router + "." + method + " already registered")
 	}
+	if entry.fieldMap != nil && len(entry.fieldMap.HeaderFields) > 0 {
+		e.needsHeaderGetter.Store(true)
+	}
 	methods[method] = entry
 }
 

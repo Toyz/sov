@@ -92,3 +92,25 @@ func TestRpcTest_ErrorPath(t *testing.T) {
 		t.Fatalf("msg = %q", rerr.Message)
 	}
 }
+
+type HdrEchoRouter struct{}
+
+type hdrEchoParams struct {
+	Tenant string `sov:"header=X-Tenant-Id"`
+}
+
+func (HdrEchoRouter) Tenant(_ *rpc.Context, p *hdrEchoParams) (string, error) { return p.Tenant, nil }
+
+// WithHeader makes a header value available to a handler's sov:"header=" param
+// via the documented test path — without it a header-param handler is
+// untestable (binds empty / 400s on a required header).
+func TestRpcTest_WithHeader(t *testing.T) {
+	eng := rpc.NewEngine()
+	eng.Register(&HdrEchoRouter{})
+	ctx := rpctest.New().WithHeader("X-Tenant-Id", "acme").Ctx()
+	var out string
+	status, err := rpctest.CallInto(eng, ctx, "HdrEcho", "tenant", nil, &out)
+	if err != nil || status != 200 || out != "acme" {
+		t.Fatalf("WithHeader bind: status=%d out=%q err=%v", status, out, err)
+	}
+}

@@ -147,7 +147,7 @@ func buildTypeCatalog(report *IntrospectReport) {
 	for _, svcName := range serviceNames {
 		for _, rd := range report.Services[svcName] {
 			for _, md := range rd.Methods {
-				if md.HasParams && len(md.Params) > 0 {
+				if md.HasBodyParams() {
 					// Use the params' first nested type-name as the type key
 					// if every field is flat. Otherwise emit the params under
 					// the generated key "{router}.{method}Params".

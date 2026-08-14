@@ -43,6 +43,21 @@ type ParamField struct {
 	Header string `json:"header,omitempty"`
 }
 
+// HasBodyParams reports whether the method has at least one BODY param field
+// (Source != "header"). Header-bound params are ambient request metadata, not
+// part of the JSON args, so type-shape/codegen consumers gate the request-body
+// argument on this — NOT on HasParams, which counts header fields too (the
+// explorer wants to render them). A method whose ONLY params are header-bound
+// takes no body argument.
+func (md MethodDescriptor) HasBodyParams() bool {
+	for _, p := range md.Params {
+		if p.Source != "header" {
+			return true
+		}
+	}
+	return false
+}
+
 // MethodDescriptor is one exported router method.
 type MethodDescriptor struct {
 	Method             string       `json:"method"`   // wire name (camelCase) — URL segment

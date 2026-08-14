@@ -28,6 +28,12 @@ func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 	// error; the typical use is stashing values onto req.Header or
 	// req.User without erroring.
 	started := time.Now()
+	// Capture the pre-parser header state so sov:"header=" params bind the same
+	// values the authz gate saw — a HeaderParser must not silently change what a
+	// header-bound param resolves to. Only when a registered method uses header=.
+	if g.engine.NeedsHeaderGetter() {
+		req.headerSnapshot = req.Header.Clone()
+	}
 	var resp *Response
 	if perr := g.callHeaderParsers(req); perr != nil {
 		resp = ErrorResponse(perr)
@@ -259,9 +265,18 @@ func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req 
 	}
 	rc.Set(ContextKeyRemoteIP, req.RemoteIP)
 	rc.Set(ContextKeyPath, req.Path)
-	// Expose inbound headers to the engine's header= param binding
-	// (rpc.CtxHeaderGetter). Header.Get is case-insensitive and nil-safe.
-	rc.Set(rpc.CtxHeaderGetter, rpc.HeaderGetter(req.Header.Get))
+	// Expose the pre-parser header snapshot to the engine's header= param
+	// binding (rpc.CtxHeaderGetter), so a bound param matches what the authz
+	// gate saw. Gated so the common all-body deployment pays no alloc; falls
+	// back to live req.Header for any dispatch that didn't pass through handle
+	// (e.g. an internal sub-dispatch).
+	if g.engine.NeedsHeaderGetter() {
+		src := req.headerSnapshot
+		if src == nil {
+			src = req.Header
+		}
+		rc.Set(rpc.CtxHeaderGetter, rpc.HeaderGetter(src.Get))
+	}
 	// Stash the inbound Authorization header so handlers can forward it
 	// on cross-service calls (e.g. mesh-mode FeedRouter calling back
 	// through the central gateway). The gateway has already validated

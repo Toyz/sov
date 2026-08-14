@@ -252,7 +252,7 @@ func emitRouter(w io.Writer, rd rpc.RouterDescriptor) {
 // that emitTypes never emits — a dangling reference that won't compile.
 // Zero fields → no-arg method posting Empty().
 func methodHasParams(md rpc.MethodDescriptor) bool {
-	return md.HasParams && len(md.Params) > 0
+	return md.HasBodyParams()
 }
 
 func emitMethod(w io.Writer, router string, md rpc.MethodDescriptor) {

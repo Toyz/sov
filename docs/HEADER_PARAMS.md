@@ -158,6 +158,19 @@ trust.
 - Because header-params are untrusted at every boundary, they suit the
   re-verify-at-each-hop posture: the value is data to be checked, never a
   standing grant.
+- **Binding is pre-parser.** A header= param binds the header state captured at
+  gateway INGRESS — before any `HeaderParser` plugin mutates `req.Header` — so a
+  bound value always matches what the `AuthzService.Check` gate saw (Check also
+  runs on the pre-parser headers). A parser that rewrites/canonicalizes a header
+  therefore cannot make the handler's param diverge from what was authorized. If
+  a handler wants a parser's normalized value, read it from `rc.State` (where
+  parsers stash), not from a header= param.
+- **Framework-managed header names are topology-dependent.** Some header names
+  are set by the framework itself: `dispatchRemote` overwrites `X-Forwarded-For`
+  with the edge's resolved `RemoteIP`, while an in-process `LinkPeer` hop leaves
+  the caller's value intact. A `header=X-Forwarded-For` param thus resolves to
+  different values depending on how the service is reached — avoid binding
+  framework-injected header names unless that topology dependence is intended.
 
 Docs for the feature must state this at the top, not in a footnote.
 
@@ -191,7 +204,16 @@ Docs for the feature must state this at the top, not in a footnote.
 - Bind pass + `rpc.CtxHeaderGetter` / `HeaderGetter` contract + scalar coercion —
   `rpc/header.go`; called from both the reflect path (`rpc/dispatch.go`) and the
   reflection-free `Handle` fast path (`rpc/handle.go`, gated on `HeaderFields`).
-- Gateway populates the getter in `dispatchLocal` — `gateway/dispatch.go`.
+- Gateway captures a pre-parser header snapshot at `handle` ingress and
+  populates the getter from it in `dispatchLocal` — both gated on
+  `Engine.NeedsHeaderGetter()` (boot-computed), so an all-body deployment pays
+  no snapshot/alloc — `gateway/dispatch.go`, `rpc/engine.go`.
+- Header-only methods take no body argument: `MethodDescriptor.HasBodyParams()`
+  (`rpc/descriptor.go`) gates the type catalog and all five generators, so a
+  method whose only params are headers emits `params: void`, not a required
+  empty struct.
+- `rpctest.WithHeader(name, value)` sets a header for handler unit tests
+  (`rpctest/rpctest.go`).
 - `ParamField.Source`/`Header` (`rpc/descriptor.go`), set in
   `describeFieldMap` (`rpc/schema.go`). These ride the `/rpc/_introspect`
   payload, so every introspection consumer sees the split:
