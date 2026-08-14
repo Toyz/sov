@@ -419,6 +419,41 @@ func toolInputProps(out map[string]any, name string) map[string]any {
 	return nil
 }
 
+type ReqHdrToolRouter struct{ mcp.Tool }
+
+type reqHdrToolParams struct {
+	Note   string `json:"note"`
+	Tenant string `sov:"header=X-Tenant-Id,required"`
+}
+
+func (ReqHdrToolRouter) Do(_ *rpc.Context, p *reqHdrToolParams) (string, error) {
+	return p.Note + "@" + p.Tenant, nil
+}
+
+// A tool method with a REQUIRED header param must succeed on tools/call when the
+// header is present. tools/call always sends {"args":{...}} (named object), the
+// exact path where the body required-check used to spuriously 400 on the
+// header field's empty wire name.
+func TestMCP_RequiredHeaderToolCallSucceeds(t *testing.T) {
+	gw := gateway.New()
+	gw.Register(&ReqHdrToolRouter{})
+	gw.MustUse(mcp.New())
+
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": "ReqHdrTool.do", "arguments": map[string]any{"note": "hi"}}})
+	hdr := gateway.Header{}
+	hdr.Set("X-Tenant-Id", "acme")
+	resp := gw.Handle(context.Background(), &gateway.Request{
+		Method: http.MethodPost, Path: "/mcp", Header: hdr, Body: body,
+	})
+	if resp.Status != http.StatusOK {
+		t.Fatalf("tools/call status=%d body=%s", resp.Status, resp.Body)
+	}
+	if strings.Contains(string(resp.Body), "is required") || !strings.Contains(string(resp.Body), "hi@acme") {
+		t.Fatalf("required-header tool call must bind, not 400: %s", resp.Body)
+	}
+}
+
 func TestMCP_HeaderParamExcludedFromSchemaButBound(t *testing.T) {
 	gw := gateway.New()
 	gw.Register(&TenantToolRouter{})

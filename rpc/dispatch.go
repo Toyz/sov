@@ -118,6 +118,9 @@ func decodeFromArray(dst reflect.Value, fm *FieldMap, raw json.RawMessage) *Erro
 	if len(entries) == 0 {
 		if fm != nil {
 			for _, f := range fm.Fields {
+				if f.HeaderSource != "" {
+					continue // header fields are enforced by bindHeaderFields, not the body
+				}
 				if f.Required {
 					return BadRequest("field %q is required", f.WireName)
 				}
@@ -209,8 +212,8 @@ func decodeFromObject(dst reflect.Value, fm *FieldMap, raw json.RawMessage) *Err
 		}
 	}
 	for _, f := range fm.Fields {
-		if !f.Required {
-			continue
+		if f.HeaderSource != "" || !f.Required {
+			continue // header fields are enforced by bindHeaderFields, not the body
 		}
 		if _, ok := entries[f.WireName]; !ok {
 			return BadRequest("field %q is required", f.WireName)

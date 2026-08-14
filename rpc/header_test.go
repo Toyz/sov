@@ -267,6 +267,71 @@ func TestHeaderParam_NestedHeaderRejectedAtRegister(t *testing.T) {
 	NewEngine().Register(&NestedHdrRouter{})
 }
 
+// A required header field must NOT be enforced by the BODY required-check
+// (which keys on the empty wire name and would 400 "field \"\" is required"
+// even when the header IS present). bindHeaderFields enforces it instead. This
+// path (named-object / empty-array args) is what MCP tools/call always sends.
+func TestHeaderParam_RequiredHeaderWithNamedObjectArgs(t *testing.T) {
+	e := NewEngine()
+	e.Register(&HdrRouter{}) // Need has ReqID sov:"header=X-Request-Id,required"
+
+	rc := ctxWithHeaders(map[string]string{"X-Request-Id": "r1"})
+	// header PRESENT + named-object body → 200 (body check must skip the header field)
+	if status, body := e.Dispatch(rc, "Hdr", "need", []byte(`{"args":{}}`)); status != 200 || !strings.Contains(string(body), `"r1"`) {
+		t.Fatalf(`required header present + {"args":{}}: status=%d body=%s`, status, body)
+	}
+	// header PRESENT + explicit empty array → 200
+	if status, _ := e.Dispatch(rc, "Hdr", "need", []byte(`{"args":[]}`)); status != 200 {
+		t.Fatalf(`required header present + {"args":[]}: status=%d`, status)
+	}
+	// header ABSENT → 400 from bindHeaderFields (right message), not "field \"\" is required"
+	rc2 := ctxWithHeaders(map[string]string{})
+	status, body := e.Dispatch(rc2, "Hdr", "need", []byte(`{"args":{}}`))
+	if status != 400 || !strings.Contains(string(body), "missing required header") {
+		t.Fatalf("required header absent: status=%d body=%s (want 400 missing required header)", status, body)
+	}
+}
+
+// The reserved-namespace check trims the extracted name, so a space-padded
+// X-Sov-* can't slip past; a padded normal header binds by its trimmed name.
+func TestHeaderParam_ReservedNamespaceTrimsWhitespace(t *testing.T) {
+	type bad struct {
+		S string `sov:"header= X-Sov-Subject"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(bad{})); err == nil || !strings.Contains(err.Error(), "X-Sov-") {
+		t.Fatalf("space-padded reserved header must still be rejected, got %v", err)
+	}
+	type ok struct {
+		T string `sov:"header= X-Tenant-Id "`
+	}
+	fm, err := BuildFieldMap(reflect.TypeOf(ok{}))
+	if err != nil {
+		t.Fatalf("padded header build: %v", err)
+	}
+	if got := fm.Fields[fm.HeaderFields[0]].HeaderSource; got != "X-Tenant-Id" {
+		t.Fatalf("header name not trimmed: %q", got)
+	}
+}
+
+type EmbedHdrBase struct {
+	TenantID string `sov:"header=X-Tenant-Id"`
+}
+
+type embedHdrParams struct {
+	EmbedHdrBase
+	Note string `json:"note"`
+}
+
+// An exported embedded struct carrying a header field is body-spoofable (sov
+// decodes it under a snake_case key, it does not promote) — rejected at build,
+// with a message that names embedding.
+func TestHeaderParam_EmbeddedHeaderRejected(t *testing.T) {
+	err := RejectNestedHeaders(reflect.TypeOf(embedHdrParams{}))
+	if err == nil || !strings.Contains(err.Error(), "embedded") {
+		t.Fatalf("embedded header field should be rejected mentioning embedding, got %v", err)
+	}
+}
+
 type posHdrParams struct {
 	A string `json:"a"`
 	T string `sov:"header=X-Tenant-Id"`

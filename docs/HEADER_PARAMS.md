@@ -52,11 +52,13 @@ A `header=` field is rejected by `BuildFieldMap` / `Register` when it:
   header is a single string;
 - **duplicates** another field's header name (case-insensitive);
 - has an empty name, or also carries a `json:` wire name;
-- sits on a **nested struct field** rather than a direct field of the top-level
-  params struct — a nested header field is never bound at runtime and, because
-  nested structs decode via plain `json.Unmarshal`, would otherwise be settable
-  from the request body while the schema shows it absent (a spoofing vector).
-  Enforced by `RejectNestedHeaders` at registration.
+- sits on a **nested OR embedded struct field** rather than a direct field of
+  the top-level params struct — sov does not flatten embedded structs, so a
+  header field one level down is never bound at runtime and, because such
+  structs decode via a `snake_case` body key, would otherwise be settable from
+  the request body while the schema shows it absent (a spoofing vector).
+  Enforced by `RejectNestedHeaders` at registration. Declare `header=` fields
+  directly on each params struct; a shared mixin is not supported.
 
 Header fields also consume no positional slot, so one may sit anywhere among
 ordinary body fields without breaking positional (`{"args":[...]}`) dispatch.
@@ -110,6 +112,12 @@ holds with zero surface-specific code — same as any other param.
 Verified against [gateway/dispatch.go](../gateway/dispatch.go) `dispatchRemote`
 (forwards `req.Header` as-is) and the `X-Sov-*`-only strip in the server
 adapter.
+
+Batch note: `/rpc/_batch` and `/rpc/_batchstream` carry ONE header set for the
+whole call, cloned onto each entry — so a header= param on a batched method
+binds the same value for every entry (the wire protocol has no per-entry header
+override). A required header absent from the batch request 400s each entry that
+declares it, independently.
 
 ## Descriptor and schema honesty (hard rule)
 

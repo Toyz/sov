@@ -392,6 +392,7 @@ func extractHeaderDirective(parts []string, t reflect.Type, sf reflect.StructFie
 	rest := make([]string, 0, len(parts))
 	for _, p := range parts {
 		if name, ok := strings.CutPrefix(strings.TrimSpace(p), "header="); ok {
+			name = strings.TrimSpace(name) // so " X-Sov-*" can't slip past the reserved check
 			if hdr != "" {
 				return nil, "", fmt.Errorf("field %s.%s: sov tag declares header= more than once", t.Name(), sf.Name)
 			}
@@ -530,7 +531,7 @@ func RejectNestedHeaders(top reflect.Type) error {
 				continue
 			}
 			if !isTop && tagHasHeader(sf.Tag.Get("sov")) {
-				return fmt.Errorf("field %s.%s: sov header= is only valid on a top-level params field, not on a nested type (a nested header field is never bound and is spoofable from the request body)", t.Name(), sf.Name)
+				return fmt.Errorf("field %s.%s: sov header= is only valid on a direct field of the top-level params struct, not on a nested or embedded struct field — sov does not flatten embedded structs, so such a field is never bound and would be spoofable from the request body; declare header= fields directly on each params struct", t.Name(), sf.Name)
 			}
 			if et := headerStructType(sf.Type); et != nil {
 				if err := visit(et, false); err != nil {
