@@ -150,6 +150,43 @@ func TestSovTag_QuotedValueWithCommas(t *testing.T) {
 	}
 }
 
+// Verifies the flagship example in docs/SOV_TAGS.md parses as documented, so
+// the doc can't drift from the parser.
+func TestSovTag_DocExample(t *testing.T) {
+	type CreateParams struct {
+		_        struct{} `sov:"perm=pages:write"`
+		Name     string   `sov:"name,0,required,title=Name,desc='The page name, unique'"`
+		OwnerID  string   `sov:"owner_id,1,omitempty"`
+		TenantID string   `sov:"header=X-Tenant-Id"`
+		Secret   string   `sov:"-"`
+	}
+	fm, err := BuildFieldMap(reflect.TypeOf(CreateParams{}))
+	if err != nil {
+		t.Fatalf("doc example failed to build: %v", err)
+	}
+	if fm.Perm != "pages:write" {
+		t.Fatalf("Perm = %q, want pages:write", fm.Perm)
+	}
+	var name *FieldInfo
+	for i := range fm.Fields {
+		if fm.Fields[i].WireName == "name" {
+			name = &fm.Fields[i]
+		}
+	}
+	if name == nil || !name.Required || name.Desc != "The page name, unique" {
+		t.Fatalf("name field wrong: %+v", name)
+	}
+	if _, ok := fm.ByName["tenant_id"]; ok {
+		t.Fatalf("header field leaked into body ByName")
+	}
+	if _, ok := fm.ByName["secret"]; ok {
+		t.Fatalf(`sov:"-" field leaked into body ByName`)
+	}
+	if len(fm.HeaderFields) != 1 {
+		t.Fatalf("expected 1 header field, got %d", len(fm.HeaderFields))
+	}
+}
+
 // A quoted value with no comma is unwrapped to its plain content.
 func TestSovTag_QuotedValueNoComma(t *testing.T) {
 	type p struct {

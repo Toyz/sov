@@ -68,7 +68,9 @@ curl -s -X POST localhost:8080/rpc/Echo/say -d '{"args":["hi"]}'
 ```
 
 Dispatch picks the shape by the first non-whitespace byte of `args`:
-`[` → positional, `{` → named. A `sov:` struct tag drives both paths.
+`[` → positional, `{` → named. A `sov:` struct tag drives both paths — see
+[docs/SOV_TAGS.md](docs/SOV_TAGS.md) for the full tag syntax (positional slots,
+metadata, commas/quotes in values, `header=`).
 
 ## Handler contract
 
