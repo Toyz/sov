@@ -320,6 +320,19 @@ func responseTypeName(md rpc.MethodDescriptor) string {
 	if s == "" || s == "void" || s == "unknown" {
 		return ""
 	}
+	// A bare TS primitive maps to Kotlin's scalar type (mirroring ktTypeOf) —
+	// ktIdent would produce Number/Integer, which are the wrong width / a boxed
+	// Java type inconsistent with the Double/Long used for params.
+	switch s {
+	case "string":
+		return "String"
+	case "number":
+		return "Double"
+	case "integer":
+		return "Long"
+	case "boolean":
+		return "Boolean"
+	}
 	if !strs.IsIdent(s) {
 		return ""
 	}

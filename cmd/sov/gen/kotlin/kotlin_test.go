@@ -185,8 +185,8 @@ func TestRun_PresenceBasedOptionality(t *testing.T) {
 	}
 	out := stdout.String()
 	for _, want := range []string{
-		`@SerialName("id") val id: String,`,                  // present-always → non-nullable, no default
-		`@SerialName("note") val note: String? = null,`,      // omitempty → nullable
+		`@SerialName("id") val id: String,`,                       // present-always → non-nullable, no default
+		`@SerialName("note") val note: String? = null,`,           // omitempty → nullable
 		`@SerialName("parent_id") val parent_id: String? = null,`, // pointer/nullable → nullable
 	} {
 		if !strings.Contains(out, want) {
@@ -209,10 +209,10 @@ func TestRun_GeneratorPolish(t *testing.T) {
 	}
 	out := stdout.String()
 	for _, want := range []string{
-		"val tags: List<String>? = null",  // primitive-element array typed
-		"val kids: List<Node>? = null",    // struct-element array, element capitalized
-		"data class Node(",                // unexported `node` → Node
-		"data class PageModel(",           // model colliding with router Page → PageModel
+		"val tags: List<String>? = null",         // primitive-element array typed
+		"val kids: List<Node>? = null",           // struct-element array, element capitalized
+		"data class Node(",                       // unexported `node` → Node
+		"data class PageModel(",                  // model colliding with router Page → PageModel
 		"class Page(private val c: SovClient) {", // router keeps the bare name
 	} {
 		if !strings.Contains(out, want) {
@@ -220,10 +220,10 @@ func TestRun_GeneratorPolish(t *testing.T) {
 		}
 	}
 	for _, notWant := range []string{
-		"data class Page(",                // model must NOT take the bare router name
-		"data class node(",                // not lowercase
-		"val tags: List<JsonElement>",     // primitive array must not be JsonElement
-		"val kids: List<JsonElement>",     // struct array must not be JsonElement
+		"data class Page(",            // model must NOT take the bare router name
+		"data class node(",            // not lowercase
+		"val tags: List<JsonElement>", // primitive array must not be JsonElement
+		"val kids: List<JsonElement>", // struct array must not be JsonElement
 	} {
 		if strings.Contains(out, notWant) {
 			t.Errorf("unexpected %q in generated client:\n%s", notWant, out)
@@ -236,5 +236,15 @@ func TestRun_MissingFromFlag(t *testing.T) {
 	code := Run([]string{}, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("expected exit 2 for missing --from, got %d", code)
+	}
+}
+
+// A bare TS primitive return maps to Kotlin's scalar type, not a capitalized
+// ktIdent (Number/Integer are the wrong width / boxed Java types).
+func TestResponseTypeName_PrimitivesMapToScalars(t *testing.T) {
+	for ts, want := range map[string]string{"string": "String", "number": "Double", "integer": "Long", "boolean": "Boolean"} {
+		if got := responseTypeName(rpc.MethodDescriptor{ResponseTypeScript: ts}); got != want {
+			t.Errorf("responseTypeName(%q) = %q, want %q", ts, got, want)
+		}
 	}
 }

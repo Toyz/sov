@@ -414,6 +414,47 @@ func TestHeaderParam_NeedsHeaderGetterFlag(t *testing.T) {
 	}
 }
 
+type malformedNestedMeta struct {
+	Secret string `sov:"header=X-Foo,desc='oops"` // unbalanced quote → split error
+}
+
+type malformedNestedParams struct {
+	Nested malformedNestedMeta `json:"nested"`
+}
+
+// A nested type whose header= tag fails to PARSE must not silently bypass
+// RejectNestedHeaders (the only validation a nested type gets) — the split
+// error propagates instead of being swallowed.
+func TestHeaderParam_MalformedNestedHeaderStillRejected(t *testing.T) {
+	if err := RejectNestedHeaders(reflect.TypeOf(malformedNestedParams{})); err == nil {
+		t.Fatalf("a malformed nested header= tag must fail RejectNestedHeaders, not bypass it")
+	}
+}
+
+// A quoted header name with inner spaces is trimmed inside the quotes too.
+func TestHeaderParam_QuotedHeaderNameInnerSpaceTrimmed(t *testing.T) {
+	type p struct {
+		X string `sov:"header=' X-Tenant-Id '"`
+	}
+	fm, err := BuildFieldMap(reflect.TypeOf(p{}))
+	if err != nil {
+		t.Fatalf("BuildFieldMap: %v", err)
+	}
+	if got := fm.Fields[fm.HeaderFields[0]].HeaderSource; got != "X-Tenant-Id" {
+		t.Fatalf("HeaderSource = %q, want X-Tenant-Id (inner spaces trimmed)", got)
+	}
+}
+
+// The inner-space form can't sneak an X-Sov-* name past the reserved reject.
+func TestHeaderParam_QuotedInnerSpaceXSovRejected(t *testing.T) {
+	type p struct {
+		X string `sov:"header=' X-Sov-Subject'"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(p{})); err == nil || !strings.Contains(err.Error(), "X-Sov-") {
+		t.Fatalf("inner-space X-Sov header must still be rejected, got %v", err)
+	}
+}
+
 type posHdrParams struct {
 	A string `json:"a"`
 	T string `sov:"header=X-Tenant-Id"`

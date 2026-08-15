@@ -48,14 +48,38 @@ func TestSovTag_QuotedPermUnquoted(t *testing.T) {
 	}
 }
 
-// An unbalanced single quote is a LOUD build error, not a silent swallow of the
-// trailing flags/kv (here `required` would otherwise be silently dropped).
+// A quoted value opened after '=' but never closed is a LOUD build error.
 func TestSovTag_UnbalancedQuoteIsBuildError(t *testing.T) {
 	type p struct {
-		X string `sov:"x,0,desc=is'nt,required"`
+		X string `sov:"x,0,desc='oops"`
 	}
 	if _, err := BuildFieldMap(reflect.TypeOf(p{})); err == nil || !strings.Contains(err.Error(), "unbalanced") {
 		t.Fatalf("unbalanced quote must be a build error, got %v", err)
+	}
+}
+
+// A possessive/contraction apostrophe is a LITERAL character (a quote opens
+// only at a value start, right after '='), so an apostrophe in one directive
+// never balances one in another and never swallows a flag. This is the exact
+// bug the whole-tag quote-balance approach had: desc=User's Id,required must
+// keep `required` and both desc/title.
+func TestSovTag_ApostropheDoesNotSwallowFlags(t *testing.T) {
+	type p struct {
+		F string `sov:"f,0,desc=User's Id,required,title=Value's Name"`
+	}
+	fm, err := BuildFieldMap(reflect.TypeOf(p{}))
+	if err != nil {
+		t.Fatalf("BuildFieldMap: %v", err)
+	}
+	f := fm.Fields[0]
+	if !f.Required {
+		t.Fatalf("required silently dropped by a possessive apostrophe: %+v", f)
+	}
+	if f.Desc != "User's Id" {
+		t.Fatalf("Desc = %q, want \"User's Id\"", f.Desc)
+	}
+	if f.Title != "Value's Name" {
+		t.Fatalf("Title = %q, want \"Value's Name\"", f.Title)
 	}
 }
 

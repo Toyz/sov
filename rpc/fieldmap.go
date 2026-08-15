@@ -88,41 +88,51 @@ var snakeIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // splitSovTokens splits a sov tag on commas, with two ways to put a literal
 // comma INSIDE a value (needed for human text like desc=/title=):
 //   - single-quote the value: sov:"desc='this, is my desc'" — a comma between
-//     matched single quotes is literal (quotes are stripped from kv values by
-//     applyFieldFlags). This is the ergonomic form.
-//   - backslash-escape it: sov:"desc=this\, is my desc" — back-compat.
+//     matched single quotes is literal (unquoteSovValue strips the pair). The
+//     opening quote is only recognized at a VALUE START (immediately after
+//     '='); a mid-value apostrophe (desc=User's Id) is a literal character and
+//     never opens/toggles a quote, so it can't silently swallow later
+//     directives. The rare apostrophe-inside-a-quoted-comma value uses \'.
+//   - backslash-escape: sov:"desc=a\,b" or a literal apostrophe as sov:"desc=isn\'t".
 func splitSovTokens(raw string) ([]string, error) {
-	var (
-		out     []string
-		buf     strings.Builder
-		inQuote bool
-	)
+	var out []string
+	var buf strings.Builder
+	inQuote := false
+	var prev byte // last byte written to buf in the current token
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
-		// A backslash escapes a comma OR a single quote, making it literal —
-		// so a value can contain an apostrophe (desc=isn\'t) or a comma
-		// (desc=a\,b) without quoting.
+		// A backslash escapes a comma OR a single quote, making it literal.
 		if c == '\\' && i+1 < len(raw) && (raw[i+1] == ',' || raw[i+1] == '\'') {
 			buf.WriteByte(raw[i+1])
+			prev = raw[i+1]
 			i++
 			continue
 		}
 		if c == '\'' {
-			inQuote = !inQuote
-			buf.WriteByte(c) // kept; unquoteSovValue strips a matched pair
+			// Open ONLY at a value start (right after '='); otherwise a
+			// possessive/contraction apostrophe is literal and never toggles.
+			if inQuote {
+				inQuote = false
+			} else if prev == '=' {
+				inQuote = true
+			}
+			buf.WriteByte(c)
+			prev = c
 			continue
 		}
 		if c == ',' && !inQuote {
 			out = append(out, buf.String())
 			buf.Reset()
+			prev = 0
 			continue
 		}
 		buf.WriteByte(c)
+		prev = c
 	}
-	// A quote opened but never closed would silently swallow the rest of the
-	// tag (including flags like `required`) — fail loud instead.
+	// A quoted value opened at a value start but never closed would silently
+	// swallow the rest of the tag (including flags like `required`) — fail loud.
 	if inQuote {
-		return nil, fmt.Errorf("unbalanced single quote (a quoted value was never closed) in sov tag %q — escape a literal apostrophe as \\'", raw)
+		return nil, fmt.Errorf("unbalanced single quote (a quoted value opened after '=' was never closed) in sov tag %q — escape a literal apostrophe as \\'", raw)
 	}
 	out = append(out, buf.String())
 	return out, nil
@@ -428,11 +438,12 @@ func extractHeaderDirective(parts []string, t reflect.Type, sf reflect.StructFie
 	rest := make([]string, 0, len(parts))
 	for _, p := range parts {
 		if name, ok := strings.CutPrefix(strings.TrimSpace(p), "header="); ok {
-			// Trim then unquote, so ` X-Sov-*` and `'X-Sov-*'` both resolve to
-			// the bare name before the reserved-namespace check and the lookup
-			// (extractHeaderDirective is a separate pass from applyFieldFlags,
-			// so it must unquote too).
-			name = unquoteSovValue(strings.TrimSpace(name))
+			// Trim, unquote, then trim again — so ` X-Sov-*`, `'X-Sov-*'`, and
+			// `' X-Sov-* '` (inner spaces inside quotes) all resolve to the bare
+			// name before the reserved-namespace check and the lookup.
+			// extractHeaderDirective is a separate pass from applyFieldFlags, so
+			// it must unquote too.
+			name = strings.TrimSpace(unquoteSovValue(strings.TrimSpace(name)))
 			if hdr != "" {
 				return nil, "", fmt.Errorf("field %s.%s: sov tag declares header= more than once", t.Name(), sf.Name)
 			}
@@ -519,19 +530,24 @@ func isScalarHeaderType(t reflect.Type) bool {
 }
 
 // tagHasHeader reports whether a sov struct tag carries a header= directive.
-func tagHasHeader(sovRaw string) bool {
+// A malformed tag (unbalanced quote) is returned as an error, NOT swallowed —
+// otherwise a nested type whose header= tag fails to parse would slip past
+// RejectNestedHeaders (which is the ONLY validation pass a nested type gets),
+// silently reopening the body-spoofing vector that guard exists to close.
+func tagHasHeader(sovRaw string) (bool, error) {
 	if sovRaw == "" || sovRaw == "-" {
-		return false
+		return false, nil
 	}
-	// Best-effort: an unbalanced-quote parse error surfaces loudly when the
-	// owning params struct is built; here nil tokens simply mean "no header".
-	toks, _ := splitSovTokens(sovRaw)
+	toks, err := splitSovTokens(sovRaw)
+	if err != nil {
+		return false, err
+	}
 	for _, tok := range toks {
 		if strings.HasPrefix(strings.TrimSpace(tok), "header=") {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // headerStructType returns the struct type reachable from t for nested-header
@@ -573,8 +589,14 @@ func RejectNestedHeaders(top reflect.Type) error {
 			if sf.Name == "_" || !sf.IsExported() {
 				continue
 			}
-			if !isTop && tagHasHeader(sf.Tag.Get("sov")) {
-				return fmt.Errorf("field %s.%s: sov header= is only valid on a direct field of the top-level params struct, not on a nested or embedded struct field — sov does not flatten embedded structs, so such a field is never bound and would be spoofable from the request body; declare header= fields directly on each params struct", t.Name(), sf.Name)
+			if !isTop {
+				has, err := tagHasHeader(sf.Tag.Get("sov"))
+				if err != nil {
+					return fmt.Errorf("field %s.%s: %w", t.Name(), sf.Name, err)
+				}
+				if has {
+					return fmt.Errorf("field %s.%s: sov header= is only valid on a direct field of the top-level params struct, not on a nested or embedded struct field — sov does not flatten embedded structs, so such a field is never bound and would be spoofable from the request body; declare header= fields directly on each params struct", t.Name(), sf.Name)
+				}
 			}
 			if et := headerStructType(sf.Type); et != nil {
 				if err := visit(et, false); err != nil {

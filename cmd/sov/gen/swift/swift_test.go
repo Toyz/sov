@@ -203,9 +203,9 @@ func TestRun_GeneratorPolish(t *testing.T) {
 	}
 	out := stdout.String()
 	for _, want := range []string{
-		"public var tags: [String]?\n",    // primitive-element array typed
-		"public var kids: [Node]?\n",      // struct-element array, element capitalized
-		"public struct Node: Codable {",   // unexported `node` → Node
+		"public var tags: [String]?\n",     // primitive-element array typed
+		"public var kids: [Node]?\n",       // struct-element array, element capitalized
+		"public struct Node: Codable {",    // unexported `node` → Node
 		"public struct PageModel: Codable", // model colliding with router Page → PageModel
 		"public final class Page {",        // router keeps the bare name
 	} {
@@ -214,10 +214,10 @@ func TestRun_GeneratorPolish(t *testing.T) {
 		}
 	}
 	for _, notWant := range []string{
-		"public struct Page: Codable", // model must NOT take the bare router name
-		"public struct node: Codable", // not lowercase
+		"public struct Page: Codable",       // model must NOT take the bare router name
+		"public struct node: Codable",       // not lowercase
 		"public var tags: [String: String]", // primitive array must not degrade
-		"public var kids: [String]?",         // struct array must not be [String]
+		"public var kids: [String]?",        // struct array must not be [String]
 	} {
 		if strings.Contains(out, notWant) {
 			t.Errorf("unexpected %q in generated client:\n%s", notWant, out)
@@ -230,5 +230,15 @@ func TestRun_MissingFromFlag(t *testing.T) {
 	code := Run([]string{}, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("expected exit 2 for missing --from, got %d", code)
+	}
+}
+
+// A bare TS primitive return maps to Swift's scalar type, not a capitalized
+// swIdent (Swift has no Number/Integer/Boolean types).
+func TestResponseTypeName_PrimitivesMapToScalars(t *testing.T) {
+	for ts, want := range map[string]string{"string": "String", "number": "Double", "integer": "Int64", "boolean": "Bool"} {
+		if got := responseTypeName(rpc.MethodDescriptor{ResponseTypeScript: ts}); got != want {
+			t.Errorf("responseTypeName(%q) = %q, want %q", ts, got, want)
+		}
 	}
 }

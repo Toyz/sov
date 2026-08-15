@@ -346,6 +346,19 @@ func responseTypeName(md rpc.MethodDescriptor) string {
 	if s == "" || s == "void" || s == "unknown" {
 		return ""
 	}
+	// A bare TS primitive maps to Swift's scalar type (mirroring swTypeOf) —
+	// swIdent would produce Number/Integer/Boolean, none of which are Swift's
+	// native types (Swift uses Double/Int64/Bool).
+	switch s {
+	case "string":
+		return "String"
+	case "number":
+		return "Double"
+	case "integer":
+		return "Int64"
+	case "boolean":
+		return "Bool"
+	}
 	if !strs.IsIdent(s) {
 		return ""
 	}
