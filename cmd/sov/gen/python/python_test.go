@@ -37,6 +37,12 @@ func fakeCatalog() gateway.IntrospectReport {
 						Method: "ping", Title: "Ping", PostPath: "/rpc/Auth/ping", HasParams: false,
 						ResponseTypeScript: "{ ok: boolean }",
 					},
+					{
+						// Bare-primitive return: must map to a Python builtin
+						// (str), NOT a capitalized non-existent class (String).
+						Method: "whoami", Title: "Whoami", PostPath: "/rpc/Auth/whoami", HasParams: false,
+						ResponseTypeScript: "string",
+					},
 				},
 			}},
 			// Router named "Page" → collides with the "Page" model type below.
@@ -124,6 +130,24 @@ func TestRun_StdoutEmitsClient(t *testing.T) {
 
 // Regression: a no-param method must emit a no-arg method and must NOT
 // reference an undefined {Router}{Method}Params type.
+// A method returning a bare TS primitive must map to a Python builtin
+// (string -> str), not a capitalized class name (String) that doesn't exist and
+// NameErrors at type-check time.
+func TestRun_PrimitiveReturnMapsToPyBuiltin(t *testing.T) {
+	s := startCatalogServer(t)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"--from", s.URL, "--out", "-"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("Run failed: %s", stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "def whoami(self) -> str:") {
+		t.Fatalf("bare `string` return should map to -> str, got:\n%s", out)
+	}
+	if strings.Contains(out, "-> String:") {
+		t.Fatalf("bare primitive return capitalized to non-existent Python type String:\n%s", out)
+	}
+}
+
 func TestRun_NoParamMethodEmitsNoDanglingType(t *testing.T) {
 	s := startCatalogServer(t)
 	var stdout, stderr bytes.Buffer

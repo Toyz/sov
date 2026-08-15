@@ -353,6 +353,19 @@ func responseTypeName(md rpc.MethodDescriptor) string {
 	if s == "" || s == "void" || s == "unknown" {
 		return ""
 	}
+	// A bare TS primitive maps to a Python builtin — NOT a capitalized class
+	// name. pyIdent would turn "string" into the non-existent "String" (Python
+	// builtins are lowercase), producing a NameError at type-check time.
+	switch s {
+	case "string":
+		return "str"
+	case "number":
+		return "float"
+	case "integer":
+		return "int"
+	case "boolean":
+		return "bool"
+	}
 	if !strs.IsIdent(s) {
 		return ""
 	}

@@ -61,16 +61,14 @@ func (e *Engine) Describe() []RouterDescriptor {
 					}
 				}
 			}
-			// HasParams is the CLIENT-facing truth: "the caller must send a
-			// params object". It reflects the wire-field count, NOT merely
-			// whether a *Params struct exists in the Go signature. A method
-			// taking a params struct with zero wire fields (empty struct, or
-			// every field header/owner-injected) sends nothing on the wire,
-			// so HasParams is false — otherwise the type catalog (which only
-			// emits a request type when len(Params) > 0) and the codegen
-			// (which references {Router}{Method}Params when HasParams) would
-			// disagree, and the generated client would name a params type
-			// that was never emitted (dangling reference → won't compile).
+			// HasParams reports whether the method takes a *Params struct with
+			// any declared field — body OR header. It counts header fields, so a
+			// header-only method still has HasParams=true; the explorer needs
+			// that to render the parameter list. The CLIENT-facing "must send a
+			// params object" truth is instead the BODY-field count: codegen and
+			// the type catalog gate on md.HasBodyParams() (body fields only), so
+			// a header-only method emits params: void / a no-arg call even
+			// though HasParams stays true. See docs/WIRE_CONTRACT.md.
 			md.HasParams = len(md.Params) > 0
 			md.RequestTypeScript, md.ResponseTypeScript = TSPreviewForMethod(ent)
 			// Reflect the response type into the catalog too, so the
