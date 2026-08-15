@@ -98,9 +98,16 @@ func splitSovTokens(raw string) ([]string, error) {
 	var out []string
 	var buf strings.Builder
 	inQuote := false
-	var prev byte // last byte written to buf in the current token
+	closed := false // a quoted value in the current token has already closed
+	var prev byte   // last byte written to buf in the current token
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
+		// Once a quoted value closes, the only thing that may follow is the
+		// comma that ends the directive — stray trailing text (desc='a'b) would
+		// otherwise leak the quote chars into the stored value. Fail loud.
+		if closed && c != ',' {
+			return nil, fmt.Errorf("text after a closing quote in sov tag %q — a quoted value must be the entire value (e.g. desc='a, b'); use \\' for a literal apostrophe", raw)
+		}
 		// A backslash escapes a comma OR a single quote, making it literal.
 		if c == '\\' && i+1 < len(raw) && (raw[i+1] == ',' || raw[i+1] == '\'') {
 			buf.WriteByte(raw[i+1])
@@ -113,6 +120,7 @@ func splitSovTokens(raw string) ([]string, error) {
 			// possessive/contraction apostrophe is literal and never toggles.
 			if inQuote {
 				inQuote = false
+				closed = true
 			} else if prev == '=' {
 				inQuote = true
 			}
@@ -124,6 +132,7 @@ func splitSovTokens(raw string) ([]string, error) {
 			out = append(out, buf.String())
 			buf.Reset()
 			prev = 0
+			closed = false
 			continue
 		}
 		buf.WriteByte(c)

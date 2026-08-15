@@ -83,6 +83,35 @@ func TestSovTag_ApostropheDoesNotSwallowFlags(t *testing.T) {
 	}
 }
 
+// Stray text after a closing quote is a loud build error, not a silent leak of
+// the quote characters into the stored value (desc='a'b previously yielded the
+// literal "'a'b").
+func TestSovTag_StrayTextAfterCloseIsBuildError(t *testing.T) {
+	type p1 struct {
+		F string `sov:"f,0,desc='a'b"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(p1{})); err == nil || !strings.Contains(err.Error(), "closing quote") {
+		t.Fatalf("desc='a'b: want closing-quote error, got %v", err)
+	}
+	type p2 struct {
+		F string `sov:"f,0,title='x'y,required"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(p2{})); err == nil || !strings.Contains(err.Error(), "closing quote") {
+		t.Fatalf("title='x'y: want closing-quote error, got %v", err)
+	}
+}
+
+// A header name with stray text after a closing quote is rejected — was a
+// silently-produced dead field ('X-A'suffix can never match a real header).
+func TestSovTag_HeaderStrayAfterCloseRejected(t *testing.T) {
+	type p struct {
+		X string `sov:"header='X-A'suffix"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(p{})); err == nil {
+		t.Fatalf("header='X-A'suffix must be a build error, not a dead field")
+	}
+}
+
 // A backslash-escaped apostrophe embeds a literal apostrophe (no wrapping quotes
 // needed), and composes with a quoted comma-bearing value.
 func TestSovTag_EscapedApostrophe(t *testing.T) {
