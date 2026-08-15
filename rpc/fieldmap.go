@@ -85,10 +85,17 @@ var snakeIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // splitSovTokens splits a sov tag value on commas, honoring `\,` as
 // an escaped literal comma so kv values can carry punctuation.
 // `\\,` becomes a literal `\,` token boundary (escape the escape).
+// splitSovTokens splits a sov tag on commas, with two ways to put a literal
+// comma INSIDE a value (needed for human text like desc=/title=):
+//   - single-quote the value: sov:"desc='this, is my desc'" — a comma between
+//     matched single quotes is literal (quotes are stripped from kv values by
+//     applyFieldFlags). This is the ergonomic form.
+//   - backslash-escape it: sov:"desc=this\, is my desc" — back-compat.
 func splitSovTokens(raw string) []string {
 	var (
-		out []string
-		buf strings.Builder
+		out     []string
+		buf     strings.Builder
+		inQuote bool
 	)
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
@@ -97,7 +104,12 @@ func splitSovTokens(raw string) []string {
 			i++
 			continue
 		}
-		if c == ',' {
+		if c == '\'' {
+			inQuote = !inQuote
+			buf.WriteByte(c) // kept; applyFieldFlags strips a matched pair
+			continue
+		}
+		if c == ',' && !inQuote {
 			out = append(out, buf.String())
 			buf.Reset()
 			continue
@@ -106,6 +118,15 @@ func splitSovTokens(raw string) []string {
 	}
 	out = append(out, buf.String())
 	return out
+}
+
+// unquoteSovValue strips one matched pair of surrounding single quotes from a
+// kv value, so sov:"desc='a, b'" yields the value `a, b`.
+func unquoteSovValue(v string) string {
+	if len(v) >= 2 && v[0] == '\'' && v[len(v)-1] == '\'' {
+		return v[1 : len(v)-1]
+	}
+	return v
 }
 
 // BuildFieldMap parses `sov:` (with `json:` fallback) tags on t and
@@ -435,7 +456,7 @@ func applyFieldFlags(info *FieldInfo, opts []string, t reflect.Type, sf reflect.
 			if i <= 0 {
 				return fmt.Errorf("field %s.%s: unknown sov tag option %q (flags: omitempty, required, deprecated; kv: title=, desc=, doc=, example=)", t.Name(), sf.Name, opt)
 			}
-			key, value := opt[:i], opt[i+1:]
+			key, value := opt[:i], unquoteSovValue(opt[i+1:])
 			if value == "" {
 				return fmt.Errorf("field %s.%s: empty value for sov tag key %q", t.Name(), sf.Name, key)
 			}

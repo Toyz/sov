@@ -2,10 +2,55 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+type bodySpoofCodec struct{}
+
+func (bodySpoofCodec) Name() string { return "bodyspoof" }
+
+// DecodeParams is a NAIVE bring-your-own codec: it ignores the FieldMap and
+// unmarshals the whole args object onto the struct — which would populate a
+// header field from the body if bindHeaderFields didn't defensively zero it.
+func (bodySpoofCodec) DecodeParams(body []byte, p any, _ *FieldMap) error {
+	var env struct {
+		Args json.RawMessage `json:"args"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return err
+	}
+	if len(env.Args) == 0 {
+		return nil
+	}
+	return json.Unmarshal(env.Args, p)
+}
+func (bodySpoofCodec) EncodeResult(d any) ([]byte, error) {
+	return json.Marshal(map[string]any{"data": d})
+}
+func (bodySpoofCodec) EncodeError(e *Error) ([]byte, error) {
+	return json.Marshal(map[string]any{"error": e.Code})
+}
+
+// A header= field must NOT be settable from the request body, even under a
+// custom codec that ignores the FieldMap. bindHeaderFields zeroes the field
+// before binding, so the body value never survives.
+func TestHeaderParam_NotSpoofableFromBodyViaCustomCodec(t *testing.T) {
+	e := NewEngine()
+	e.Register(&HdrRouter{}) // Who: hdrParams{Tenant sov:"header=X-Tenant-Id"}
+	e.SetCodec(bodySpoofCodec{})
+	// No header getter installed; the body tries to set Tenant directly.
+	rc := NewContext(context.Background())
+	status, body := e.Dispatch(rc, "Hdr", "who", []byte(`{"args":{"Tenant":"attacker"}}`))
+	if status != 200 {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if strings.Contains(string(body), "attacker") {
+		t.Fatalf("header field spoofed from body under a custom codec: %s", body)
+	}
+}
 
 type HdrRouter struct{}
 

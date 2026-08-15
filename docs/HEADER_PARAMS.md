@@ -99,7 +99,11 @@ Touch points:
 
 Binding sits **outside** the codec on purpose. The codec owns the body wire
 (JSON, or a bring-your-own binary codec); header binding is orthogonal to it, so
-a custom codec neither sees nor re-encodes header fields.
+a custom codec neither sees nor re-encodes header fields. This is enforced, not
+merely conventional: `bindHeaderFields` **zeroes** each header field before
+binding, so even a BYO codec that ignores the `FieldMap` and unmarshals the
+whole struct (which could otherwise set a header field from the body) cannot
+break the "body OR header, never both" rule.
 
 ## Mesh transparency (free)
 

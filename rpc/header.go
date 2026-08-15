@@ -46,6 +46,14 @@ func bindHeaderFields(dst reflect.Value, fm *FieldMap, ctx *Context) *Error {
 	}
 	for _, idx := range fm.HeaderFields {
 		f := fm.Fields[idx]
+		// Wipe whatever the codec decoded into this field FIRST. The shipped
+		// jsonCodec decodes only through ByName/ByPos (which exclude header
+		// fields), but a bring-your-own Codec.DecodeParams that ignores the
+		// FieldMap — e.g. a plain json.Unmarshal over the whole struct — could
+		// populate a header field straight from the request body. Zeroing makes
+		// "body OR header, never both" hold for ANY codec, not just the default.
+		fv := st.Field(f.StructIdx)
+		fv.Set(reflect.Zero(fv.Type()))
 		var raw string
 		if getter != nil {
 			raw = getter(f.HeaderSource)
@@ -54,9 +62,9 @@ func bindHeaderFields(dst reflect.Value, fm *FieldMap, ctx *Context) *Error {
 			if f.Required {
 				return BadRequest("missing required header %q", f.HeaderSource)
 			}
-			continue // optional + absent → leave the zero value
+			continue // optional + absent → stays zero
 		}
-		if err := setScalarFromString(st.Field(f.StructIdx), raw); err != nil {
+		if err := setScalarFromString(fv, raw); err != nil {
 			return BadRequest("header %q: %v", f.HeaderSource, err)
 		}
 	}
