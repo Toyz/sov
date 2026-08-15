@@ -205,7 +205,9 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 	// Same authz/perm gate /rpc applies; claims were resolved on the /mcp
 	// request by the auth middleware, so reuse them (no re-verify).
 	claims, _ := mcpReq.User.(*gateway.Claims)
-	if err := p.gw.Authorize(ctx, claims, router, method, mcpReq.Header); err != nil {
+	// Authorize on the PRE-parser header state (matching the /rpc surface),
+	// so a HeaderParser can't make the authz view diverge from the bind.
+	if err := p.gw.Authorize(ctx, claims, router, method, p.gw.PreParserHeader(mcpReq)); err != nil {
 		resp := gateway.ErrorResponseFromAny(err)
 		p.gw.RecordDispatch(mcpReq, router, method, path, resp, started)
 		return toolResult(resp), nil
@@ -229,6 +231,10 @@ func (p *Plugin) callTool(ctx context.Context, mcpReq *gateway.Request, params j
 		User:     mcpReq.User, // verified claims flow to the handler / remote hop
 		RemoteIP: mcpReq.RemoteIP,
 	}
+	// Preserve the pre-parser header snapshot so a header= param binds the same
+	// value the /rpc surface would (this sub-request bypasses Handle, where the
+	// snapshot is normally taken).
+	gateway.InheritRequestSnapshot(sub, mcpReq)
 	resp := p.gw.Dispatch(ctx, sub)
 	// Record against mcpReq (the outer request handle sees), not sub, so the
 	// generic /mcp event is suppressed; the resolved router/method/status ride

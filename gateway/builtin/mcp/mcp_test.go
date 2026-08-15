@@ -486,3 +486,65 @@ func TestMCP_HeaderParamExcludedFromSchemaButBound(t *testing.T) {
 		t.Fatalf("header param not bound through the MCP surface: %s", resp.Body)
 	}
 }
+
+type mcpRewriteParser struct{}
+
+func (mcpRewriteParser) PluginName() string { return "mcp-rewrite" }
+func (mcpRewriteParser) ParseHeaders(req *gateway.Request) *rpc.Error {
+	if req.Header.Get("X-Tenant-Id") == "raw-alias" {
+		req.Header.Set("X-Tenant-Id", "canonical-tenant")
+	}
+	return nil
+}
+
+type mcpRecordingAuthz struct{ seen *string }
+
+func (a mcpRecordingAuthz) Check(_ *rpc.Context, p *gateway.CheckParams) (*gateway.AuthzDecision, error) {
+	if a.seen != nil {
+		*a.seen = p.Headers["X-Tenant-Id"]
+	}
+	return &gateway.AuthzDecision{Allow: true}, nil
+}
+
+type PermTenantToolRouter struct{ mcp.Tool }
+
+type permTenantToolParams struct {
+	_      struct{} `sov:"perm=read"`
+	Note   string   `json:"note"`
+	Tenant string   `sov:"header=X-Tenant-Id"`
+}
+
+func (PermTenantToolRouter) Echo(_ *rpc.Context, p *permTenantToolParams) (string, error) {
+	return p.Note + "@" + p.Tenant, nil
+}
+
+// A header= param must bind (and authorize) on the PRE-parser header state via
+// tools/call too — matching the /rpc surface. tools/call builds a sub-request
+// and dispatches it directly (bypassing Handle where the snapshot is taken), so
+// it must inherit the outer request's snapshot; otherwise a HeaderParser makes
+// the same tool resolve a different value than /rpc for the same request.
+func TestMCP_HeaderParamPreParserAcrossToolCall(t *testing.T) {
+	var authzSaw string
+	gw := gateway.New()
+	gw.Register(&PermTenantToolRouter{})
+	gw.RegisterAuthz(&mcpRecordingAuthz{seen: &authzSaw})
+	gw.MustUse(&mcpRewriteParser{})
+	gw.MustUse(mcp.New())
+
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": "PermTenantTool.echo", "arguments": map[string]any{"note": "hi"}}})
+	hdr := gateway.Header{}
+	hdr.Set("X-Tenant-Id", "raw-alias")
+	resp := gw.Handle(context.Background(), &gateway.Request{
+		Method: http.MethodPost, Path: "/mcp", Header: hdr, Body: body,
+	})
+	if resp.Status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Status, resp.Body)
+	}
+	if authzSaw != "raw-alias" {
+		t.Fatalf("MCP authz saw %q, want raw-alias (pre-parser)", authzSaw)
+	}
+	if !strings.Contains(string(resp.Body), "hi@raw-alias") {
+		t.Fatalf("MCP tool bound the parser-rewritten value, not pre-parser: %s", resp.Body)
+	}
+}

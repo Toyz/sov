@@ -168,7 +168,12 @@ trust.
   runs on the pre-parser headers). A parser that rewrites/canonicalizes a header
   therefore cannot make the handler's param diverge from what was authorized. If
   a handler wants a parser's normalized value, read it from `rc.State` (where
-  parsers stash), not from a header= param.
+  parsers stash), not from a header= param. This holds ACROSS surfaces: a
+  surface that builds a synthetic sub-request and routes it via `Dispatch`
+  (bypassing `Handle`, where the snapshot is taken) — e.g. MCP `tools/call` —
+  must call `gateway.InheritRequestSnapshot(sub, parent)` and authorize on
+  `gw.PreParserHeader(parent)`, so `/rpc` and `/mcp` bind and authorize a
+  header= param identically for the same request (PEMM).
 - **Framework-managed header names are topology-dependent.** Some header names
   are set by the framework itself: `dispatchRemote` overwrites `X-Forwarded-For`
   with the edge's resolved `RemoteIP`, while an in-process `LinkPeer` hop leaves

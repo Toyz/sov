@@ -112,6 +112,34 @@ func subjectOf(req *Request) string {
 // observability plugins see per-call router/method/status/subject just as they
 // do for /rpc, instead of only the opaque outer request. Status, error code, and
 // Mode are read from resp; subject from req. No-op when resp is nil.
+// PreParserHeader returns the header state captured at gateway ingress — before
+// any HeaderParser plugin mutated req.Header — falling back to req.Header when no
+// snapshot was taken (no registered method uses header= params). A surface that
+// AUTHORIZES or BINDS header= params off an inbound request should use this so
+// its view matches the /rpc surface, which authorizes and binds pre-parser. See
+// docs/HEADER_PARAMS.md.
+func (g *Gateway) PreParserHeader(req *Request) Header {
+	if req == nil {
+		return nil
+	}
+	if req.headerSnapshot != nil {
+		return req.headerSnapshot
+	}
+	return req.Header
+}
+
+// InheritRequestSnapshot copies the pre-parser header snapshot from parent onto
+// a synthetic sub-request, so a surface that builds its own *Request and routes
+// it via Dispatch (bypassing Handle + HeaderParsers) still binds header= params
+// from the pre-parser state — matching the /rpc surface and the documented
+// invariant. Call it on any sub-request built from an inbound one before
+// Dispatch.
+func InheritRequestSnapshot(sub, parent *Request) {
+	if sub != nil && parent != nil {
+		sub.headerSnapshot = parent.headerSnapshot
+	}
+}
+
 func (g *Gateway) RecordDispatch(req *Request, router, method, path string, resp *Response, started time.Time) {
 	if resp == nil {
 		return
