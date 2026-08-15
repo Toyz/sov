@@ -2,8 +2,81 @@ package rpc
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
+
+// A quoted header name is unquoted before the lookup + reserved-namespace check
+// (extractHeaderDirective is a separate pass and must unquote too).
+func TestSovTag_QuotedHeaderNameUnquoted(t *testing.T) {
+	type p struct {
+		X string `sov:"header='X-Tenant-Id'"`
+	}
+	fm, err := BuildFieldMap(reflect.TypeOf(p{}))
+	if err != nil {
+		t.Fatalf("BuildFieldMap: %v", err)
+	}
+	if got := fm.Fields[fm.HeaderFields[0]].HeaderSource; got != "X-Tenant-Id" {
+		t.Fatalf("HeaderSource = %q, want X-Tenant-Id (unquoted)", got)
+	}
+}
+
+// A quoted X-Sov-* header name is still rejected — the reserved check runs after
+// unquoting, so quoting can't sneak past it.
+func TestSovTag_QuotedXSovHeaderRejected(t *testing.T) {
+	type p struct {
+		X string `sov:"header='X-Sov-Subject'"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(p{})); err == nil || !strings.Contains(err.Error(), "X-Sov-") {
+		t.Fatalf("quoted X-Sov header must still be rejected, got %v", err)
+	}
+}
+
+// perm= on the blank sentinel is unquoted too, so a comma-bearing perm token is
+// not corrupted with literal quotes.
+func TestSovTag_QuotedPermUnquoted(t *testing.T) {
+	type p struct {
+		_ struct{} `sov:"perm='role:admin,role:owner'"`
+		X string   `json:"x"`
+	}
+	fm, err := BuildFieldMap(reflect.TypeOf(p{}))
+	if err != nil {
+		t.Fatalf("BuildFieldMap: %v", err)
+	}
+	if fm.Perm != "role:admin,role:owner" {
+		t.Fatalf("Perm = %q, want role:admin,role:owner (unquoted)", fm.Perm)
+	}
+}
+
+// An unbalanced single quote is a LOUD build error, not a silent swallow of the
+// trailing flags/kv (here `required` would otherwise be silently dropped).
+func TestSovTag_UnbalancedQuoteIsBuildError(t *testing.T) {
+	type p struct {
+		X string `sov:"x,0,desc=is'nt,required"`
+	}
+	if _, err := BuildFieldMap(reflect.TypeOf(p{})); err == nil || !strings.Contains(err.Error(), "unbalanced") {
+		t.Fatalf("unbalanced quote must be a build error, got %v", err)
+	}
+}
+
+// A backslash-escaped apostrophe embeds a literal apostrophe (no wrapping quotes
+// needed), and composes with a quoted comma-bearing value.
+func TestSovTag_EscapedApostrophe(t *testing.T) {
+	type p struct {
+		A string `sov:"a,0,desc=isn\\'t"`
+		B string `sov:"b,1,desc='a, isn\\'t b'"`
+	}
+	fm, err := BuildFieldMap(reflect.TypeOf(p{}))
+	if err != nil {
+		t.Fatalf("BuildFieldMap: %v", err)
+	}
+	if fm.Fields[0].Desc != "isn't" {
+		t.Fatalf("A.Desc = %q, want isn't", fm.Fields[0].Desc)
+	}
+	if fm.Fields[1].Desc != "a, isn't b" {
+		t.Fatalf("B.Desc = %q, want \"a, isn't b\"", fm.Fields[1].Desc)
+	}
+}
 
 // A single-quoted kv value may contain commas and spaces — the ergonomic way to
 // write human text (desc=/title=/doc=/example=) that contains a comma.

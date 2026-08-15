@@ -91,7 +91,7 @@ var snakeIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 //     matched single quotes is literal (quotes are stripped from kv values by
 //     applyFieldFlags). This is the ergonomic form.
 //   - backslash-escape it: sov:"desc=this\, is my desc" — back-compat.
-func splitSovTokens(raw string) []string {
+func splitSovTokens(raw string) ([]string, error) {
 	var (
 		out     []string
 		buf     strings.Builder
@@ -99,14 +99,17 @@ func splitSovTokens(raw string) []string {
 	)
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
-		if c == '\\' && i+1 < len(raw) && raw[i+1] == ',' {
-			buf.WriteByte(',')
+		// A backslash escapes a comma OR a single quote, making it literal —
+		// so a value can contain an apostrophe (desc=isn\'t) or a comma
+		// (desc=a\,b) without quoting.
+		if c == '\\' && i+1 < len(raw) && (raw[i+1] == ',' || raw[i+1] == '\'') {
+			buf.WriteByte(raw[i+1])
 			i++
 			continue
 		}
 		if c == '\'' {
 			inQuote = !inQuote
-			buf.WriteByte(c) // kept; applyFieldFlags strips a matched pair
+			buf.WriteByte(c) // kept; unquoteSovValue strips a matched pair
 			continue
 		}
 		if c == ',' && !inQuote {
@@ -116,8 +119,13 @@ func splitSovTokens(raw string) []string {
 		}
 		buf.WriteByte(c)
 	}
+	// A quote opened but never closed would silently swallow the rest of the
+	// tag (including flags like `required`) — fail loud instead.
+	if inQuote {
+		return nil, fmt.Errorf("unbalanced single quote (a quoted value was never closed) in sov tag %q — escape a literal apostrophe as \\'", raw)
+	}
 	out = append(out, buf.String())
-	return out
+	return out, nil
 }
 
 // unquoteSovValue strips one matched pair of surrounding single quotes from a
@@ -176,7 +184,11 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 				// hide; requires `internal`), and `perm=<token>` (declarative
 				// authz requirement, HELL-280 — opaque, never parsed here).
 				var sawInternal bool
-				for _, tok := range splitSovTokens(sovRaw) {
+				sentinelToks, err := splitSovTokens(sovRaw)
+				if err != nil {
+					return nil, fmt.Errorf("%s: blank `_` field sov tag: %w", t.Name(), err)
+				}
+				for _, tok := range sentinelToks {
 					tok = strings.TrimSpace(tok)
 					switch {
 					case tok == "":
@@ -187,7 +199,7 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 					case tok == "hard":
 						fm.InternalHard = true
 					case strings.HasPrefix(tok, "perm="):
-						val := tok[len("perm="):]
+						val := unquoteSovValue(tok[len("perm="):])
 						if val == "" {
 							return nil, fmt.Errorf("%s: blank `_` field sov tag has empty perm= value", t.Name())
 						}
@@ -224,7 +236,10 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 		var explicitName, explicitPos bool
 
 		if hasSov && sovRaw != "" {
-			parts := splitSovTokens(sovRaw)
+			parts, err := splitSovTokens(sovRaw)
+			if err != nil {
+				return nil, fmt.Errorf("field %s.%s: sov tag: %w", t.Name(), sf.Name, err)
+			}
 			// A header= directive can appear anywhere in the tag; pull it out
 			// first. A header-bound field takes its value from a request
 			// header, not the body, so it has NO wire name/position — only
@@ -413,7 +428,11 @@ func extractHeaderDirective(parts []string, t reflect.Type, sf reflect.StructFie
 	rest := make([]string, 0, len(parts))
 	for _, p := range parts {
 		if name, ok := strings.CutPrefix(strings.TrimSpace(p), "header="); ok {
-			name = strings.TrimSpace(name) // so " X-Sov-*" can't slip past the reserved check
+			// Trim then unquote, so ` X-Sov-*` and `'X-Sov-*'` both resolve to
+			// the bare name before the reserved-namespace check and the lookup
+			// (extractHeaderDirective is a separate pass from applyFieldFlags,
+			// so it must unquote too).
+			name = unquoteSovValue(strings.TrimSpace(name))
 			if hdr != "" {
 				return nil, "", fmt.Errorf("field %s.%s: sov tag declares header= more than once", t.Name(), sf.Name)
 			}
@@ -504,7 +523,10 @@ func tagHasHeader(sovRaw string) bool {
 	if sovRaw == "" || sovRaw == "-" {
 		return false
 	}
-	for _, tok := range splitSovTokens(sovRaw) {
+	// Best-effort: an unbalanced-quote parse error surfaces loudly when the
+	// owning params struct is built; here nil tokens simply mean "no header".
+	toks, _ := splitSovTokens(sovRaw)
+	for _, tok := range toks {
 		if strings.HasPrefix(strings.TrimSpace(tok), "header=") {
 			return true
 		}
