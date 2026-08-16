@@ -99,5 +99,8 @@ func (e *pluginEntry) satisfiedHooks() []string {
 	if e.recoveryHandler != nil {
 		out = append(out, "RecoveryHandler")
 	}
+	if e.logger != nil {
+		out = append(out, "Logger")
+	}
 	return out
 }

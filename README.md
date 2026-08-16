@@ -40,9 +40,11 @@ import (
     "log"
 
     "github.com/Toyz/sov"
+    "github.com/Toyz/sov/gateway/builtin/rpc"
 )
 
-type EchoRouter struct{}
+// Embed rpc.Served — the marker that exposes a router over the /rpc surface.
+type EchoRouter struct{ rpc.Served }
 type SayParams struct{ Msg string `json:"msg"` }
 
 func (r *EchoRouter) Say(_ *sov.Context, p *SayParams) (map[string]string, error) {
@@ -54,6 +56,7 @@ func (r *EchoRouter) Say(_ *sov.Context, p *SayParams) (map[string]string, error
 
 func main() {
     gw := sov.New()
+    gw.MustUse(rpc.New()) // the /rpc surface is a builtin — register it like any other
     gw.Register(&EchoRouter{})
     log.Fatal(gw.ListenAndServe(context.Background(), ":8080"))
 }
@@ -121,9 +124,9 @@ byte-equivalent output against all of them — that's the PEMM proof.
 
 ```go
 gw := sov.New(
-    sov.WithAdvertiseURL("http://this-pod:8080"), // stamp X-Sov-Upstream
-    sov.WithHMACSecret(secret),                   // seal X-Sov-* bundle
+    sov.WithAdvertiseURL("http://this-pod:8080"), // stamp X-Sov-Upstream on outbound hops
 )
+gw.MustUse(rpc.New())                             // the /rpc surface (a builtin)
 
 // Local in-process — engine.Register sugar.
 gw.Register(&UserRouter{...})
