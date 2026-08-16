@@ -26,16 +26,23 @@ import (
 	"github.com/Toyz/sov/gateway"
 )
 
-// Config has no fields yet — reserved for future knobs (mount path
-// override, redact list, etc.). Empty struct preserves the uniform
-// New(Config{}) call shape across all builtins.
-type Config struct{}
+// Config configures the manifest plugin.
+type Config struct {
+	// Public serves the manifest (service list, plugins, role bindings, and
+	// internal mesh addresses) to ANONYMOUS callers even when the gateway has
+	// auth configured. Default false: an authed gateway requires a valid
+	// subject; a no-auth (local/dev) gateway is always open.
+	Public bool
+}
 
 // Plugin is the manifest emitter returned by New.
-type Plugin struct{ gw *gateway.Gateway }
+type Plugin struct {
+	gw     *gateway.Gateway
+	public bool
+}
 
 // New returns the manifest plugin from cfg.
-func New(cfg Config) *Plugin { _ = cfg; return &Plugin{} }
+func New(cfg Config) *Plugin { return &Plugin{public: cfg.Public} }
 
 // Compile-time proof of the hooks this plugin binds — a signature
 // drift here is a build error, not a silent non-binding at runtime.
@@ -71,9 +78,18 @@ type ManifestReport struct {
 }
 
 // ServeRoute builds the manifest report on demand.
-func (p *Plugin) ServeRoute(_ context.Context, _ *gateway.Request) *gateway.Response {
+func (p *Plugin) ServeRoute(_ context.Context, req *gateway.Request) *gateway.Response {
 	if p.gw == nil {
 		return &gateway.Response{Status: 503, Body: []byte(`{"error":"gateway not bound"}`)}
+	}
+	// Anonymous callers are blocked on an authed gateway unless Public — the
+	// manifest discloses internal mesh addresses + the full plugin list.
+	if !p.public && p.gw.AuthBinding() != nil && req.User == nil {
+		return &gateway.Response{
+			Status: http.StatusUnauthorized,
+			Header: gateway.Header{"Content-Type": "application/json"},
+			Body:   []byte(`{"error":{"code":"UNAUTHORIZED","message":"authentication required for the manifest (set manifest Public:true to allow anonymous access)"}}`),
+		}
 	}
 	rpt := ManifestReport{
 		Plugins: p.gw.PluginInfos(),
