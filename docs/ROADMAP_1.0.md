@@ -63,7 +63,7 @@ policy. Verify with live examples, not just `go test`.
 - [x] **W3.3 accesslog builtin** `[P0][S-M]` — one structured line per DispatchEvent with
   request-id; nothing logs on the dispatch path today. (obs #3)
 - [ ] **W3.4 pprof/debug builtin** `[P1][S]` — opt-in, auth-gated `net/http/pprof`. (obs #4)
-- [ ] **W3.5 build-info on the wire** `[P1][S]` — `debug.ReadBuildInfo` → manifest + a
+- [x] **W3.5 build-info on the wire** `[P1][S]` — `debug.ReadBuildInfo` → manifest + a
   `build_info` gauge. (obs #5)
 - [ ] **W3.6 metric gaps** `[P1][S-M]` — in-flight gauge, `sov_upstream_breaker_state` gauge,
   go-runtime metrics. (obs #6)
@@ -93,7 +93,7 @@ policy. Verify with live examples, not just `go test`.
   guarantee: wire contract is the compat surface), tag process. (DX P0-3)
 - [ ] **W5.4 Exported `gatewaytest` harness** `[P1][M]` — promote gateway spin-up (currently
   internal gwtest) so consumers test mesh routing/auth-across-hop. (DX P1-4)
-- [ ] **W5.5 Fuzz the sov tag parser** `[P1][S]` — `FuzzParseSovTag`; the flagged bug-hotspot
+- [x] **W5.5 Fuzz the sov tag parser** `[P1][S]` — `FuzzParseSovTag`; the flagged bug-hotspot
   is unfuzzed. (DX P1-5)
 - [ ] **W5.6 rpctest in chirp handlers** `[P1][S]` — the flagship test-ergonomics package is in
   no example; chirp handlers have no unit tests. (DX P1-6)
