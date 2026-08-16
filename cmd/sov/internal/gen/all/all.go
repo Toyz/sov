@@ -27,6 +27,7 @@ import (
 	"github.com/Toyz/sov/cmd/sov/internal/catalog"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/golang"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/kotlin"
+	"github.com/Toyz/sov/cmd/sov/internal/gen/openapi"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/python"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/swift"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/ts"
@@ -90,6 +91,7 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		{name: "kotlin", filename: "Client.kt", pkg: "com.example.sov", emit: kotlin.Emit},
 		{name: "swift", filename: "Client.swift", pkg: "Sov", emit: swift.Emit},
 		{name: "python", filename: "client.py", pkg: "sovclient", emit: python.Emit},
+		{name: "openapi", filename: "openapi.json", pkg: "Sov API", emit: openapi.Emit},
 	}
 
 	for _, s := range specs {
