@@ -39,7 +39,7 @@ policy. Verify with live examples, not just `go test`.
 ## Wave 2 — schema vocabulary / data-model completeness
 - [ ] **W2.1 Field validation constraints** `[P0][M]` — `min/max/minlen/maxlen/pattern/enum`
   in the tag grammar; enforce in a post-bind pass; surface to OpenAPI/MCP/codegen. (protocol #1)
-- [ ] **W2.2 Request caps** `[P0][S-M]` — `maxitems`/`maxlen` per field + global max array
+- [x] **W2.2 Request caps** `[P0][S-M]` — `maxitems`/`maxlen` per field + global max array
   len / nesting depth guard in the decode path (decode-amplification DoS). (protocol #2, security P2-6)
 - [ ] **W2.3 Error taxonomy** `[P0][M]` — add `Retryable`, `Details []FieldError`, `RetryAfter`
   to `rpc.Error` + wire; populate Details from W2.1; thread into codegen `SovError` + OpenAPI;
@@ -91,7 +91,7 @@ policy. Verify with live examples, not just `go test`.
   TS misses `X-Sov-Request-Id`. (DX P0-2, #11)
 - [x] **W5.3 Release engineering** `[P0][S-M]` — `CHANGELOG.md`, `docs/VERSIONING.md` (stability
   guarantee: wire contract is the compat surface), tag process. (DX P0-3)
-- [ ] **W5.4 Exported `gatewaytest` harness** `[P1][M]` — promote gateway spin-up (currently
+- [x] **W5.4 Exported `gatewaytest` harness** `[P1][M]` — promote gateway spin-up (currently
   internal gwtest) so consumers test mesh routing/auth-across-hop. (DX P1-4)
 - [x] **W5.5 Fuzz the sov tag parser** `[P1][S]` — `FuzzParseSovTag`; the flagged bug-hotspot
   is unfuzzed. (DX P1-5)
