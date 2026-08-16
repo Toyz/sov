@@ -172,6 +172,7 @@ func (s *NetHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
 	req := &Request{
 		Method:   r.Method,
 		Path:     r.URL.Path,
+		RawQuery: r.URL.RawQuery,
 		Header:   hdr,
 		Body:     body,
 		RemoteIP: remoteIPFromHTTP(r, s.opts.TrustProxyHeaders),

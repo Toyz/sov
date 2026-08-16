@@ -48,6 +48,12 @@ type Request struct {
 	// RemoteIP is the caller's source IP. Server picks it from
 	// X-Forwarded-For or the transport-level remote address.
 	RemoteIP string
+	// RawQuery is the URL query string without the leading '?', e.g.
+	// "seconds=10". Empty for most business calls — the /rpc codec reads args
+	// from the body, not the query. Surfaced so a RouteHandler plugin (pprof,
+	// a custom GET endpoint) can read query params, which were otherwise
+	// inaccessible through the gateway's Request.
+	RawQuery string
 	// User is the authenticated subject, set by Server-side middleware
 	// before dispatch. nil for anonymous calls. Gateway copies this onto
 	// the rpc.Context handed to handlers.
