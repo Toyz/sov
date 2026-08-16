@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 )
 
@@ -68,8 +69,47 @@ func (jsonCodec) DecodeParams(body []byte, params any, fm *FieldMap) error {
 	}
 	// bindParams returns a typed *Error; guard the nil case so we never
 	// hand back a non-nil error interface wrapping a nil *Error.
-	if perr := bindParams(reflect.ValueOf(params).Elem(), fm, req.Args); perr != nil {
+	dst := reflect.ValueOf(params).Elem()
+	if perr := bindParams(dst, fm, req.Args); perr != nil {
 		return perr
+	}
+	if perr := validateConstraints(dst, fm); perr != nil {
+		return perr
+	}
+	return nil
+}
+
+// validateConstraints enforces declared field constraints (currently maxlen)
+// on the bound params. A no-op unless a field opted in, so it costs existing
+// routers nothing. Violations are collected into a single 400 carrying
+// field-level Details.
+func validateConstraints(v reflect.Value, fm *FieldMap) *Error {
+	var details []FieldError
+	for i := range fm.Fields {
+		f := &fm.Fields[i]
+		if f.MaxLen <= 0 {
+			continue
+		}
+		fv := v.Field(f.StructIdx)
+		for fv.Kind() == reflect.Ptr {
+			if fv.IsNil() {
+				break
+			}
+			fv = fv.Elem()
+		}
+		switch fv.Kind() {
+		case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
+			if fv.Len() > f.MaxLen {
+				details = append(details, FieldError{
+					Field:   f.WireName,
+					Code:    "TOO_LONG",
+					Message: fmt.Sprintf("exceeds max length %d", f.MaxLen),
+				})
+			}
+		}
+	}
+	if len(details) > 0 {
+		return BadRequest("request failed validation").WithDetails(details...)
 	}
 	return nil
 }

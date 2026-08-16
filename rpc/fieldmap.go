@@ -67,7 +67,11 @@ type FieldInfo struct {
 	Required   bool
 	Omitempty  bool
 	Deprecated bool
-	Type       reflect.Type
+	// MaxLen, when > 0, caps a string field's byte length or a slice/array/map
+	// field's element count (a `maxlen=` directive). Enforced after binding; a
+	// violation is a 400 with a field-level detail. 0 = unbounded.
+	MaxLen int
+	Type   reflect.Type
 
 	// HeaderSource, when non-empty, binds this field from the named request
 	// header (sov:"header=X-Tenant-Id") instead of the request body. Such a
@@ -538,8 +542,14 @@ func applyFieldFlags(info *FieldInfo, opts []string, t reflect.Type, sf reflect.
 				info.Doc = value
 			case "example":
 				info.Example = value
+			case "maxlen":
+				n, err := strconv.Atoi(value)
+				if err != nil || n < 0 {
+					return fmt.Errorf("field %s.%s: sov tag maxlen must be a non-negative integer, got %q", t.Name(), sf.Name, value)
+				}
+				info.MaxLen = n
 			default:
-				return fmt.Errorf("field %s.%s: unknown sov tag key %q (allowed: title, desc, doc, example)", t.Name(), sf.Name, key)
+				return fmt.Errorf("field %s.%s: unknown sov tag key %q (allowed: title, desc, doc, example, maxlen)", t.Name(), sf.Name, key)
 			}
 		}
 	}
