@@ -10,7 +10,7 @@ where possible, "gaps are consumer responsibility" means sov ships the *seam*, n
 policy. Verify with live examples, not just `go test`.
 
 ## Wave 0 — foundational seams (unblock the rest)
-- [ ] **W0.1 Enrich `DispatchEvent` + record security denials** `[P0][S]` — add `RemoteIP`,
+- [x] **W0.1 Enrich `DispatchEvent` + record security denials** `[P0][S]` — add `RemoteIP`,
   `TraceID`, `SpanID`; emit an event on the auth/authz middleware short-circuit (401/403
   currently invisible to audit+metrics — they fire before `handle()`). Fixes the false
   SECURITY.md "RemoteIP stamped into audit events" claim. Unblocks W3.3 accesslog + W3.2
@@ -26,7 +26,7 @@ policy. Verify with live examples, not just `go test`.
 - [ ] **W1.2 Per-call deadline budget** `[P0][M]` — derive `context.WithTimeout` from a
   configurable default + inbound `X-Sov-Deadline`; stamp remaining budget on every hop so a
   chain shares one deadline. (resilience #2)
-- [ ] **W1.3 Breaker trips on 5xx** `[P1][S]` — currently only transport errors count; an
+- [x] **W1.3 Breaker trips on 5xx** `[P1][S]` — currently only transport errors count; an
   up-but-broken pod (500s) never trips. Count 502/503/504. (resilience #4)
 - [ ] **W1.4 Idempotency-aware retries** `[P1][M]` — bounded retry, exp backoff + full jitter,
   gated by an idempotency marker/key, re-pick a replica (W1.1), honor the budget (W1.2),
@@ -56,11 +56,11 @@ policy. Verify with live examples, not just `go test`.
   surface-only. Bidi = explicit non-goal. (protocol #7)
 
 ## Wave 3 — observability / operability
-- [ ] **W3.1 Readiness vs liveness** `[P0][M]` — serving-state atomic (starting→ready→draining);
+- [x] **W3.1 Readiness vs liveness** `[P0][M]` — serving-state atomic (starting→ready→draining);
   `/rpc/_ready` 503 until ready + on drain; `ReadinessContributor` hook. (obs #1)
 - [ ] **W3.2 W3C traceparent builtin** `[P0-P1][M-L]` — parse/mint child span per hop
   (`requestid` is the template); set event trace fields (W0.1). (obs #2)
-- [ ] **W3.3 accesslog builtin** `[P0][S-M]` — one structured line per DispatchEvent with
+- [x] **W3.3 accesslog builtin** `[P0][S-M]` — one structured line per DispatchEvent with
   request-id; nothing logs on the dispatch path today. (obs #3)
 - [ ] **W3.4 pprof/debug builtin** `[P1][S]` — opt-in, auth-gated `net/http/pprof`. (obs #4)
 - [ ] **W3.5 build-info on the wire** `[P1][S]` — `debug.ReadBuildInfo` → manifest + a
@@ -83,7 +83,7 @@ policy. Verify with live examples, not just `go test`.
   document bearer=CSRF-immune, cookie-auth=consumer-owned; optional Origin-check. (security P2-5)
 
 ## Wave 5 — DX / testing / docs / release
-- [ ] **W5.1 Fix README headline quickstart** `[P0][S]` — `sov.New()` mounts no surface →
+- [x] **W5.1 Fix README headline quickstart** `[P0][S]` — `sov.New()` mounts no surface →
   the copy-paste quickstart 404s. Fix docs (and decide whether `sov.New` should default-mount
   `rpc.New()`). (DX P0-1)
 - [ ] **W5.2 Generated-client resilience** `[P0][M]` — retry-on 429/503/network + backoff/jitter
