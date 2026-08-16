@@ -44,7 +44,7 @@ policy. Verify with live examples, not just `go test`.
 - [x] **W2.3 Error taxonomy** `[P0][M]` — add `Retryable`, `Details []FieldError`, `RetryAfter`
   to `rpc.Error` + wire; populate Details from W2.1; thread into codegen `SovError` + OpenAPI;
   generate the `ErrorCode` union from registered codes (stop hardcoding). (protocol #3)
-- [ ] **W2.4 Pagination envelope** `[P1][M]` — optional `rpc.Page[T]` (`items,next_cursor,
+- [x] **W2.4 Pagination envelope** `[P1][M]` — optional `rpc.Page[T]` (`items,next_cursor,
   has_more`) + `PageParams`; codegen async-iterator. (protocol #4)
 - [x] **W2.5 Idempotency-key + store seam** `[P1][M]` — `Idempotency-Key` header +
   `IdempotencyStore` iface (in-mem default), short-circuit replays. Pairs with W1.4. (protocol #5)
