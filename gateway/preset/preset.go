@@ -28,6 +28,7 @@ import (
 	"github.com/Toyz/sov/gateway/builtin/registertoken"
 	"github.com/Toyz/sov/gateway/builtin/registry"
 	"github.com/Toyz/sov/gateway/builtin/requestid"
+	"github.com/Toyz/sov/gateway/builtin/rpc"
 )
 
 // MonolithConfig composes the plugin configs for a single-binary
@@ -88,6 +89,7 @@ func monolithSet(cfg MonolithConfig, disableRegister bool) []any {
 	regCfg := cfg.Registry
 	regCfg.DisableRegister = disableRegister
 	out := []any{
+		rpc.New(), // the /rpc surface — a builtin like every other
 		requestid.New(cfg.RequestID),
 		registry.New(regCfg),
 		batch.New(cfg.Batch),
@@ -116,7 +118,7 @@ type PodConfig struct {
 // Pod returns the plugin set for a mesh-pod deployment. Empty
 // HMACSeal.Secret leaves that plugin off.
 func Pod(cfg PodConfig) []any {
-	out := []any{requestid.New(cfg.RequestID)}
+	out := []any{rpc.New(), requestid.New(cfg.RequestID)}
 	if len(cfg.HMACSeal.Secret) > 0 {
 		out = append(out, hmacseal.New(cfg.HMACSeal))
 	}
@@ -149,6 +151,7 @@ type RegistryConfig struct {
 // disclose information, so enable them explicitly via gw.Use(...).
 func Registry(cfg RegistryConfig) []any {
 	out := []any{
+		rpc.New(), // the /rpc surface — a builtin like every other
 		requestid.New(cfg.RequestID),
 		registry.New(cfg.Registry),
 		batch.New(cfg.Batch),

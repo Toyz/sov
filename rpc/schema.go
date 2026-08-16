@@ -145,6 +145,13 @@ func describeFieldMap(fm *FieldMap) []ParamField {
 			Doc:          f.Doc,
 			Example:      f.Example,
 		}
+		if f.HeaderSource != "" {
+			// Header-bound: mark the source so body-schema consumers (MCP,
+			// OpenAPI, codegen) can exclude it. JSONName is empty — it has no
+			// body wire name.
+			pf.Source = "header"
+			pf.Header = f.HeaderSource
+		}
 		if st == "object" {
 			pf.TypeName = nestedTypeName(f.Type)
 		} else if st == "array" {

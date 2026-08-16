@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	. "github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -30,7 +31,7 @@ func (r *HideProbeRouter) HiddenMethods() []string                              
 func (r *HideProbeRouter) HardHiddenMethods() []string                             { return []string{"debug"} }
 
 func TestIntrospect_HonorsHiddenMethods(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&HideProbeRouter{})
 	gw.ExposeIntrospect()
 
@@ -85,7 +86,7 @@ func (r *GoCasedHideRouter) HiddenMethods() []string                 { return []
 // The declared perm (HELL-280) must survive the introspect strip/split
 // pipeline into the public catalog so the explorer/codegen can show it.
 func TestIntrospect_EmitsPerm(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&PermGuardedRouter{}) // AuthzRequirements: do -> pages:write
 	gw.ExposeIntrospect()
 	body := string(gw.IntrospectBody(context.Background(), &Request{Header: Header{}}).Body)
@@ -95,7 +96,7 @@ func TestIntrospect_EmitsPerm(t *testing.T) {
 }
 
 func TestIntrospect_GoCasedHiddenMarkerStillHides(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&GoCasedHideRouter{})
 	gw.ExposeIntrospect()
 	pub := string(gw.IntrospectBody(context.Background(), &Request{Header: Header{}}).Body)

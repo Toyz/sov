@@ -18,6 +18,16 @@ import (
 //
 // Service names should NOT collide with the host gateway's own
 // routers — the LocalResolver wins the chain.
+//
+// SCOPE — dispatch only, not introspection. A LinkPeer'd peer is a
+// dispatch target: /rpc calls (and anything that routes through Dispatch)
+// resolve to it. It is NOT merged into this gateway's /rpc/_introspect
+// catalog (peerResolver.Introspectables returns nil), so introspection-driven
+// surfaces — MCP tools/list, the explorer, upward federation — do NOT see a
+// peer's routers. To expose a node's routers as MCP tools ACROSS a boundary,
+// use registry/remote federation (JoinMesh): each node runs its own mcp
+// builtin and tags its own tool routers, and the tag federates on the
+// descriptor. In-process peer introspection merge is a known gap (HELL-295).
 func (g *Gateway) LinkPeer(peer *Gateway, services ...string) {
 	if peer == nil || len(services) == 0 {
 		return
@@ -45,5 +55,11 @@ func (p *peerResolver) Resolve(_ context.Context, service string) (*Endpoint, bo
 	return nil, false
 }
 
-func (p *peerResolver) Services() []string        { return p.services }
+func (p *peerResolver) Services() []string { return p.services }
+
+// Introspectables returns nil: a LinkPeer'd peer is a dispatch target, not an
+// introspection source. Merging a peer's tagged catalog in-process (so its
+// routers surface as MCP tools/explorer entries) is a known gap — see LinkPeer
+// SCOPE and HELL-295. Use registry federation to expose routers across a node
+// boundary today.
 func (p *peerResolver) Introspectables() []string { return nil }

@@ -66,6 +66,32 @@ type TypeVariant struct {
 // descriptors into report.Services.
 func BuildTypeCatalog(report *IntrospectReport) { buildTypeCatalog(report) }
 
+// withoutHeaderParams returns fields with header-bound entries removed. A
+// header field is not part of a type's JSON shape, so the type catalog (and
+// everything downstream — codegen, OpenAPI, drift hashing) must not see it.
+// Returns the input unchanged when there are no header fields (the common
+// case), so all-body types pay nothing.
+func withoutHeaderParams(fields []rpc.ParamField) []rpc.ParamField {
+	hasHeader := false
+	for _, f := range fields {
+		if f.Source == "header" {
+			hasHeader = true
+			break
+		}
+	}
+	if !hasHeader {
+		return fields
+	}
+	out := make([]rpc.ParamField, 0, len(fields))
+	for _, f := range fields {
+		if f.Source == "header" {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 func buildTypeCatalog(report *IntrospectReport) {
 	// Service names are processed in sorted order for deterministic output.
 	serviceNames := make([]string, 0, len(report.Services))
@@ -83,6 +109,11 @@ func buildTypeCatalog(report *IntrospectReport) {
 		if typeName == "" {
 			return
 		}
+		// Header-bound fields are not part of the type's JSON shape, so they
+		// are excluded from the catalog (codegen/OpenAPI emit the correct wire
+		// type). They remain on md.Params (Source="header") for the explorer
+		// and docs. See docs/HEADER_PARAMS.md.
+		fields = withoutHeaderParams(fields)
 		hash := hashShape(fields)
 		bucket, ok := shapeBuckets[typeName]
 		if !ok {
@@ -116,7 +147,7 @@ func buildTypeCatalog(report *IntrospectReport) {
 	for _, svcName := range serviceNames {
 		for _, rd := range report.Services[svcName] {
 			for _, md := range rd.Methods {
-				if md.HasParams && len(md.Params) > 0 {
+				if md.HasBodyParams() {
 					// Use the params' first nested type-name as the type key
 					// if every field is flat. Otherwise emit the params under
 					// the generated key "{router}.{method}Params".

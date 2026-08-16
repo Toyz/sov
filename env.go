@@ -16,7 +16,7 @@ import (
 //
 //	func main() {
 //	    sov.LoadEnv(".sov.env")
-//	    gw := sov.NewMesh(...)
+//	    gw := sov.New()
 //	}
 //
 // Wire shape: one entry per line. Lines beginning with '#' or empty

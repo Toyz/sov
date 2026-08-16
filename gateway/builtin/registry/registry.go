@@ -16,12 +16,18 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/rpc"
 )
+
+// maxHeartbeatSeconds clamps a registrant-supplied HeartbeatInterval so an
+// attacker can't pin a near-immortal registration (TTL = heartbeat × 3) and
+// exhaust the registry map.
+const maxHeartbeatSeconds = 300
 
 // Config configures the registry plugin. Zero values fall back to
 // 2s/1s probe timeouts. AllowedNames, when non-empty, restricts
@@ -40,6 +46,15 @@ type Config struct {
 	// public /health route and federation/health/introspect aggregation are
 	// unaffected. Leave false for Hybrid/Registry shapes that accept joins.
 	DisableRegister bool
+	// AllowOpenRegister permits BOOTING with an ungated /rpc/_register — no
+	// AllowedNames and no meshsecret/registertoken join-gate plugin. Default
+	// false: the gateway REFUSES to boot when _register is open, because an
+	// open register endpoint is an SSRF + credential-forwarding + traffic-
+	// hijack vector (any reachable actor self-registers a service address the
+	// gateway then health/introspect-probes and proxies routed traffic to,
+	// forwarding the caller's Authorization header). Set true only on a
+	// trusted, network-isolated deployment where you accept that risk.
+	AllowOpenRegister bool
 }
 
 // ttlMultiplier sets a registration's TTL to heartbeat × 3, so a pod can
@@ -53,10 +68,18 @@ type Plugin struct {
 	healthProbeTimeout     time.Duration
 	allowed                map[string]struct{}
 	disableRegister        bool
+	allowOpenRegister      bool
 }
 
 // New returns the registry plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("registry.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	if cfg.IntrospectProbeTimeout <= 0 {
 		cfg.IntrospectProbeTimeout = 2 * time.Second
 	}
@@ -74,6 +97,7 @@ func New(cfg Config) *Plugin {
 		healthProbeTimeout:     cfg.HealthProbeTimeout,
 		allowed:                allow,
 		disableRegister:        cfg.DisableRegister,
+		allowOpenRegister:      cfg.AllowOpenRegister,
 	}
 }
 
@@ -165,9 +189,14 @@ func (p *Plugin) ValidateBoot(g *gateway.Gateway) error {
 		return nil
 	}
 	if !p.registerGated(g) {
-		g.Log().Warn("registry: /rpc/_register is OPEN — any reachable actor can self-register a service and receive routed traffic. " +
-			"Set a join gate before exposing this gateway on an untrusted network: registertoken.Config{Token:...}, " +
-			"meshsecret.Config{Secret:...}, or Registry.AllowedNames.")
+		if !p.allowOpenRegister {
+			return gateway.HaltErr(errors.New("registry: /rpc/_register is OPEN (no join gate) — refusing to boot. " +
+				"An open register endpoint is an SSRF + credential-forwarding + traffic-hijack vector. Set a join gate " +
+				"(registertoken.Config{Token:...}, meshsecret.Config{Secret:...}, or Registry.AllowedNames), or set " +
+				"Registry.AllowOpenRegister=true to accept the risk on a trusted, isolated network."))
+		}
+		g.Log().Warn("registry: /rpc/_register is OPEN and AllowOpenRegister=true — any reachable actor can self-register a " +
+			"service and receive routed traffic. Ensure this gateway is on a trusted, isolated network.")
 	}
 	return nil
 }
@@ -219,9 +248,15 @@ func (p *Plugin) serveRegister(ctx context.Context, req *gateway.Request) *gatew
 	if err != nil {
 		return gateway.ErrorResponse(rpc.BadRequest("address: %v", err))
 	}
+	if rr.Deregister {
+		return p.serveDeregister(ctx, &rr, canonAddr)
+	}
 	hb := rr.HeartbeatInterval
 	if hb <= 0 {
 		hb = 10
+	}
+	if hb > maxHeartbeatSeconds {
+		hb = maxHeartbeatSeconds // clamp a hostile near-immortal TTL
 	}
 	ttl := time.Duration(hb*ttlMultiplier) * time.Second
 
@@ -256,26 +291,19 @@ func (p *Plugin) serveRegister(ctx context.Context, req *gateway.Request) *gatew
 			})
 		}
 	}
-	usedPreemption := false
-	if existing, ok := p.gw.Resolver().Resolve(ctx, rr.Name); ok {
-		existingCanon, _ := gateway.NormalizeUpstreamURL(existing.RemoteAddr)
-		if existingCanon != canonAddr {
-			if !p.gw.PreemptFederation(rr.Name, existingCanon, canonAddr) {
-				return gateway.ErrorResponse(&rpc.Error{
-					Status: 409, Code: "SERVICE_CONFLICT",
-					Message: "_register: " + rr.Name + " already registered at " + existingCanon,
-				})
-			}
-			usedPreemption = true
-		}
-	}
-
+	// A second address for the same service is a REPLICA, not a conflict
+	// (W1.1): the resolver round-robins across all live replicas and skips any
+	// whose breaker is open, giving mesh services HA + failover. Admission to
+	// /rpc/_register is already gated (meshsecret/token), so a pod that can add
+	// a replica is exactly as trusted as one registering a new service —
+	// replicas grant no new privilege. Auth/authz role single-ownership is
+	// enforced above via ROLE_CONFLICT and is unaffected: replicas share the
+	// service name, never a new role binding.
 	forceIntrospect := p.gw.PluginByName("explorer") != nil
 	introspectable := rr.Introspect || forceIntrospect
-	reg.PutEntry(rr.Name, rr.Address, ttl, gateway.EntryOptions{Introspectable: introspectable})
-	if usedPreemption {
-		p.gw.ConsumeFederationPreemption(rr.Name)
-	}
+	// Key replicas by the CANONICAL address so equivalent URLs dedup to one
+	// replica and deregister (which deletes by canonAddr) always matches.
+	reg.PutEntry(rr.Name, canonAddr, ttl, gateway.EntryOptions{Introspectable: introspectable})
 
 	if rr.Auth {
 		method := rr.Verify
@@ -298,6 +326,31 @@ func (p *Plugin) serveRegister(ctx context.Context, req *gateway.Request) *gatew
 	return &gateway.Response{Status: 200, Body: body}
 }
 
+// serveDeregister withdraws the caller's services from the registry — the
+// graceful-shutdown counterpart to register. It removes ONLY entries whose
+// current address still matches the caller's, so a late or duplicated
+// deregister can never evict a service a newer pod has since taken over.
+// Admission is already vetted by the meshsecret/token HeaderParser on the
+// shared /rpc/_register path, so no extra gate is needed here.
+func (p *Plugin) serveDeregister(ctx context.Context, rr *gateway.RegisterRequest, canonAddr string) *gateway.Response {
+	reg := p.gw.RegisterResolver()
+	names := rr.Services
+	if len(names) == 0 && rr.Name != "" {
+		names = []string{rr.Name}
+	}
+	for _, svc := range names {
+		if svc == "" || strings.HasPrefix(svc, "_") {
+			continue
+		}
+		// Remove ONLY this caller's own replica. Delete is keyed by
+		// (service, address), so sibling replicas — and any newer pod that has
+		// since taken the name — are untouched. Idempotent if already gone.
+		reg.Delete(svc, canonAddr)
+	}
+	body, _ := json.Marshal(rpc.SuccessResponse{Data: gateway.RegisterResponse{OK: true}})
+	return &gateway.Response{Status: 200, Body: body}
+}
+
 func (p *Plugin) serveFederated(ctx context.Context, rr *gateway.RegisterRequest, canonAddr string, ttl time.Duration) *gateway.Response {
 	if rr.Auth || rr.Authz {
 		return gateway.ErrorResponse(rpc.BadRequest("federated gateways cannot hold auth/authz role in v1"))
@@ -305,7 +358,7 @@ func (p *Plugin) serveFederated(ctx context.Context, rr *gateway.RegisterRequest
 	if len(rr.Services) == 0 {
 		return gateway.ErrorResponse(rpc.BadRequest("federate=true requires non-empty services list"))
 	}
-	preempted := map[string]bool{}
+	preemptedFrom := map[string]string{}
 	for _, svc := range rr.Services {
 		if svc == "" || strings.HasPrefix(svc, "_") {
 			return gateway.ErrorResponse(rpc.BadRequest("invalid federated service name %q", svc))
@@ -326,7 +379,7 @@ func (p *Plugin) serveFederated(ctx context.Context, rr *gateway.RegisterRequest
 							"; register builtin/preempt plugin to allow takeover",
 					})
 				}
-				preempted[svc] = true
+				preemptedFrom[svc] = existing.RemoteAddr
 			}
 		}
 	}
@@ -334,8 +387,15 @@ func (p *Plugin) serveFederated(ctx context.Context, rr *gateway.RegisterRequest
 	forceIntrospect := p.gw.PluginByName("explorer") != nil
 	introspectable := rr.Introspect || forceIntrospect
 	for _, svc := range rr.Services {
-		reg.PutEntry(svc, rr.Address, ttl, gateway.EntryOptions{Introspectable: introspectable})
-		if preempted[svc] {
+		// Federation stays single-owner: a preemptive takeover REPLACES the old
+		// front rather than adding a replica, so drop the preempted address
+		// first. (Direct service registration allows replicas; federated
+		// fronting does not in v1 — see the W1.1 roadmap note.)
+		if old, ok := preemptedFrom[svc]; ok {
+			reg.Delete(svc, old)
+		}
+		reg.PutEntry(svc, canonAddr, ttl, gateway.EntryOptions{Introspectable: introspectable})
+		if _, ok := preemptedFrom[svc]; ok {
 			p.gw.ConsumeFederationPreemption(svc)
 		}
 	}

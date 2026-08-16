@@ -51,3 +51,18 @@ func TestVerify_ConstantTimeEdges(t *testing.T) {
 		t.Error("differing tokens must not verify")
 	}
 }
+
+// Make-before-break rotation: the registry accepts a new token AND the old one.
+func TestRegisterToken_AcceptsRotatedToken(t *testing.T) {
+	both := New(Config{Token: []byte("new"), Tokens: [][]byte{[]byte("old")}})
+	if err := both.ParseHeaders(req("/rpc/_register", "new")); err != nil {
+		t.Fatalf("new token must pass: %v", err)
+	}
+	if err := both.ParseHeaders(req("/rpc/_register", "old")); err != nil {
+		t.Fatalf("old (still-accepted) token must pass: %v", err)
+	}
+	newOnly := New(Config{Token: []byte("new")})
+	if err := newOnly.ParseHeaders(req("/rpc/_register", "old")); err == nil {
+		t.Fatal("a dropped token must be rejected")
+	}
+}

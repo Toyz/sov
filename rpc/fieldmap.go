@@ -44,6 +44,18 @@ type FieldMap struct {
 	// parses the string. Empty when undeclared. Declaring it more than once
 	// on the sentinel is a build error.
 	Perm string
+	// Deprecated marks the method (via `deprecated` or `deprecated=<reason>` on
+	// the blank `_` sentinel) as deprecated. Surfaces in introspect, the OpenAPI
+	// spec, and generated-client doc comments. DeprecatedReason is the optional
+	// human note (e.g. "use Foo.bar instead"); empty when just `deprecated`.
+	Deprecated       bool
+	DeprecatedReason string
+
+	// HeaderFields lists indices into Fields that bind from a request header
+	// (FieldInfo.HeaderSource != ""), so dispatch binds them in one pass
+	// without scanning every field. Empty (nil) for the common all-body case,
+	// so the hot path pays nothing.
+	HeaderFields []int
 }
 
 // FieldInfo is the per-field resolution of the tag grammar.
@@ -55,7 +67,18 @@ type FieldInfo struct {
 	Required   bool
 	Omitempty  bool
 	Deprecated bool
-	Type       reflect.Type
+	// MaxLen, when > 0, caps a string field's byte length or a slice/array/map
+	// field's element count (a `maxlen=` directive). Enforced after binding; a
+	// violation is a 400 with a field-level detail. 0 = unbounded.
+	MaxLen int
+	Type   reflect.Type
+
+	// HeaderSource, when non-empty, binds this field from the named request
+	// header (sov:"header=X-Tenant-Id") instead of the request body. Such a
+	// field is NOT a body wire field: it has no WireName/Position, is excluded
+	// from ByName/ByPos and every body schema, and is bound post-decode from
+	// the context header getter. See docs/HEADER_PARAMS.md.
+	HeaderSource string
 
 	// Human-facing metadata from the sov tag `key=value` pairs. None
 	// affect dispatch — they flow into Describe(), the explorer UI,
@@ -72,27 +95,75 @@ var snakeIdent = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // splitSovTokens splits a sov tag value on commas, honoring `\,` as
 // an escaped literal comma so kv values can carry punctuation.
 // `\\,` becomes a literal `\,` token boundary (escape the escape).
-func splitSovTokens(raw string) []string {
-	var (
-		out []string
-		buf strings.Builder
-	)
+// splitSovTokens splits a sov tag on commas, with two ways to put a literal
+// comma INSIDE a value (needed for human text like desc=/title=):
+//   - single-quote the value: sov:"desc='this, is my desc'" — a comma between
+//     matched single quotes is literal (unquoteSovValue strips the pair). The
+//     opening quote is only recognized at a VALUE START (immediately after
+//     '='); a mid-value apostrophe (desc=User's Id) is a literal character and
+//     never opens/toggles a quote, so it can't silently swallow later
+//     directives. The rare apostrophe-inside-a-quoted-comma value uses \'.
+//   - backslash-escape: sov:"desc=a\,b" or a literal apostrophe as sov:"desc=isn\'t".
+func splitSovTokens(raw string) ([]string, error) {
+	var out []string
+	var buf strings.Builder
+	inQuote := false
+	closed := false // a quoted value in the current token has already closed
+	var prev byte   // last byte written to buf in the current token
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
-		if c == '\\' && i+1 < len(raw) && raw[i+1] == ',' {
-			buf.WriteByte(',')
+		// Once a quoted value closes, the only thing that may follow is the
+		// comma that ends the directive — stray trailing text (desc='a'b) would
+		// otherwise leak the quote chars into the stored value. Fail loud.
+		if closed && c != ',' {
+			return nil, fmt.Errorf("text after a closing quote in sov tag %q — a quoted value must be the entire value (e.g. desc='a, b'); use \\' for a literal apostrophe", raw)
+		}
+		// A backslash escapes a comma OR a single quote, making it literal.
+		if c == '\\' && i+1 < len(raw) && (raw[i+1] == ',' || raw[i+1] == '\'') {
+			buf.WriteByte(raw[i+1])
+			prev = raw[i+1]
 			i++
 			continue
 		}
-		if c == ',' {
+		if c == '\'' {
+			// Open ONLY at a value start (right after '='); otherwise a
+			// possessive/contraction apostrophe is literal and never toggles.
+			if inQuote {
+				inQuote = false
+				closed = true
+			} else if prev == '=' {
+				inQuote = true
+			}
+			buf.WriteByte(c)
+			prev = c
+			continue
+		}
+		if c == ',' && !inQuote {
 			out = append(out, buf.String())
 			buf.Reset()
+			prev = 0
+			closed = false
 			continue
 		}
 		buf.WriteByte(c)
+		prev = c
+	}
+	// A quoted value opened at a value start but never closed would silently
+	// swallow the rest of the tag (including flags like `required`) — fail loud.
+	if inQuote {
+		return nil, fmt.Errorf("unbalanced single quote (a quoted value opened after '=' was never closed) in sov tag %q — escape a literal apostrophe as \\'", raw)
 	}
 	out = append(out, buf.String())
-	return out
+	return out, nil
+}
+
+// unquoteSovValue strips one matched pair of surrounding single quotes from a
+// kv value, so sov:"desc='a, b'" yields the value `a, b`.
+func unquoteSovValue(v string) string {
+	if len(v) >= 2 && v[0] == '\'' && v[len(v)-1] == '\'' {
+		return v[1 : len(v)-1]
+	}
+	return v
 }
 
 // BuildFieldMap parses `sov:` (with `json:` fallback) tags on t and
@@ -101,6 +172,12 @@ func splitSovTokens(raw string) []string {
 //
 // t must be a struct type. Pointer-to-struct callers should pass
 // t.Elem().
+// maxPositionalSlot caps an explicit sov-tag position. It bounds the ByPos slot
+// array so a hostile/typo'd tag can't drive a huge allocation at Register time.
+// 64Ki is far beyond any real struct's field count; legitimate gaps stay well
+// under it and still reach the contiguity check.
+const maxPositionalSlot = 1 << 16
+
 func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 	if t == nil {
 		return nil, fmt.Errorf("BuildFieldMap: nil type")
@@ -142,7 +219,11 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 				// hide; requires `internal`), and `perm=<token>` (declarative
 				// authz requirement, HELL-280 — opaque, never parsed here).
 				var sawInternal bool
-				for _, tok := range splitSovTokens(sovRaw) {
+				sentinelToks, err := splitSovTokens(sovRaw)
+				if err != nil {
+					return nil, fmt.Errorf("%s: blank `_` field sov tag: %w", t.Name(), err)
+				}
+				for _, tok := range sentinelToks {
 					tok = strings.TrimSpace(tok)
 					switch {
 					case tok == "":
@@ -153,7 +234,7 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 					case tok == "hard":
 						fm.InternalHard = true
 					case strings.HasPrefix(tok, "perm="):
-						val := tok[len("perm="):]
+						val := unquoteSovValue(tok[len("perm="):])
 						if val == "" {
 							return nil, fmt.Errorf("%s: blank `_` field sov tag has empty perm= value", t.Name())
 						}
@@ -161,8 +242,13 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 							return nil, fmt.Errorf("%s: blank `_` field sov tag declares perm= more than once", t.Name())
 						}
 						fm.Perm = val
+					case tok == "deprecated":
+						fm.Deprecated = true
+					case strings.HasPrefix(tok, "deprecated="):
+						fm.Deprecated = true
+						fm.DeprecatedReason = unquoteSovValue(tok[len("deprecated="):])
 					default:
-						return nil, fmt.Errorf("%s: blank `_` field sov tag has unknown directive %q (allowed: internal, hard, perm=…)", t.Name(), tok)
+						return nil, fmt.Errorf("%s: blank `_` field sov tag has unknown directive %q (allowed: internal, hard, perm=…, deprecated[=reason])", t.Name(), tok)
 					}
 				}
 				if fm.InternalHard && !sawInternal {
@@ -190,65 +276,68 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 		var explicitName, explicitPos bool
 
 		if hasSov && sovRaw != "" {
-			parts := splitSovTokens(sovRaw)
-			// parts[0] = name (optional), parts[1] = position (optional), parts[2:] = flags
-			if parts[0] != "" {
-				if !snakeIdent.MatchString(parts[0]) {
-					return nil, fmt.Errorf("field %s.%s: sov tag name %q is not a valid snake_case identifier", t.Name(), sf.Name, parts[0])
-				}
-				info.WireName = parts[0]
-				explicitName = true
+			parts, err := splitSovTokens(sovRaw)
+			if err != nil {
+				return nil, fmt.Errorf("field %s.%s: sov tag: %w", t.Name(), sf.Name, err)
 			}
-			if len(parts) >= 2 && parts[1] != "" {
-				p, err := strconv.Atoi(parts[1])
-				if err != nil {
-					return nil, fmt.Errorf("field %s.%s: sov tag position %q is not an integer: %w", t.Name(), sf.Name, parts[1], err)
-				}
-				if p < 0 {
-					return nil, fmt.Errorf("field %s.%s: sov tag position %d must be >= 0", t.Name(), sf.Name, p)
-				}
-				info.Position = p
-				explicitPos = true
+			// A header= directive can appear anywhere in the tag; pull it out
+			// first. A header-bound field takes its value from a request
+			// header, not the body, so it has NO wire name/position — only
+			// flags + human metadata apply.
+			rest, hdr, herr := extractHeaderDirective(parts, t, sf)
+			if herr != nil {
+				return nil, herr
 			}
-			if len(parts) > 2 {
-				seenKV := map[string]bool{}
-				for _, opt := range parts[2:] {
-					opt = strings.TrimSpace(opt)
-					switch opt {
-					case "":
-						// allow trailing comma
-					case "omitempty":
-						info.Omitempty = true
-					case "required":
-						info.Required = true
-					case "deprecated":
-						info.Deprecated = true
-					default:
-						if i := strings.IndexByte(opt, '='); i > 0 {
-							key := opt[:i]
-							value := opt[i+1:]
-							if value == "" {
-								return nil, fmt.Errorf("field %s.%s: empty value for sov tag key %q", t.Name(), sf.Name, key)
-							}
-							if seenKV[key] {
-								return nil, fmt.Errorf("field %s.%s: duplicate sov tag key %q", t.Name(), sf.Name, key)
-							}
-							seenKV[key] = true
-							switch key {
-							case "title":
-								info.Title = value
-							case "desc":
-								info.Desc = value
-							case "doc":
-								info.Doc = value
-							case "example":
-								info.Example = value
-							default:
-								return nil, fmt.Errorf("field %s.%s: unknown sov tag key %q (allowed: title, desc, doc, example)", t.Name(), sf.Name, key)
-							}
-							continue
-						}
-						return nil, fmt.Errorf("field %s.%s: unknown sov tag option %q (flags: omitempty, required, deprecated; kv: title=, desc=, doc=, example=)", t.Name(), sf.Name, opt)
+			if hdr != "" {
+				// A header is a single string, so a header= field must be a
+				// scalar (or pointer to one). Reject struct/slice/map at boot
+				// rather than deferring to a first-request 400.
+				if !isScalarHeaderType(sf.Type) {
+					return nil, fmt.Errorf("field %s.%s: sov header= requires a scalar field type (string/bool/int/uint/float, or a pointer to one), got %s", t.Name(), sf.Name, sf.Type)
+				}
+				info.HeaderSource = hdr
+				if err := applyFieldFlags(&info, rest, t, sf); err != nil {
+					return nil, err
+				}
+				// A field is body OR header, never both: an explicit json/sov
+				// wire name alongside header= is ambiguous.
+				if jt, ok := sf.Tag.Lookup("json"); ok {
+					if jn, _, _ := strings.Cut(jt, ","); jn != "" && jn != "-" {
+						return nil, fmt.Errorf("field %s.%s: header= field must not also declare a json wire name %q (a field is body OR header, not both)", t.Name(), sf.Name, jn)
+					}
+				}
+			} else {
+				// parts[0] = name (optional), parts[1] = position (optional), parts[2:] = flags
+				if parts[0] != "" {
+					if !snakeIdent.MatchString(parts[0]) {
+						return nil, fmt.Errorf("field %s.%s: sov tag name %q is not a valid snake_case identifier", t.Name(), sf.Name, parts[0])
+					}
+					info.WireName = parts[0]
+					explicitName = true
+				}
+				if len(parts) >= 2 && parts[1] != "" {
+					p, err := strconv.Atoi(parts[1])
+					if err != nil {
+						return nil, fmt.Errorf("field %s.%s: sov tag position %q is not an integer: %w", t.Name(), sf.Name, parts[1], err)
+					}
+					if p < 0 {
+						return nil, fmt.Errorf("field %s.%s: sov tag position %d must be >= 0", t.Name(), sf.Name, p)
+					}
+					// Reject an absurd position at parse time — before it sizes the
+					// ByPos slot array (make([]int, MaxPos+1)) into a multi-terabyte
+					// allocation that OOM-crashes Register on a typo'd/hostile tag
+					// like `name,99999999999`. The cap is far above any real struct
+					// (no method has 64k positional args), so legitimate gaps still
+					// reach the "must be contiguous" check below.
+					if p > maxPositionalSlot {
+						return nil, fmt.Errorf("field %s.%s: sov tag position %d exceeds the maximum of %d", t.Name(), sf.Name, p, maxPositionalSlot)
+					}
+					info.Position = p
+					explicitPos = true
+				}
+				if len(parts) > 2 {
+					if err := applyFieldFlags(&info, parts[2:], t, sf); err != nil {
+						return nil, err
 					}
 				}
 			}
@@ -258,8 +347,8 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 			return nil, fmt.Errorf("field %s.%s: sov tag has both 'required' and 'omitempty' — pick one", t.Name(), sf.Name)
 		}
 
-		// JSON tag fallback for wire name.
-		if !explicitName {
+		// JSON tag fallback for wire name. Header fields have no wire name.
+		if !explicitName && info.HeaderSource == "" {
 			if jt, ok := sf.Tag.Lookup("json"); ok {
 				jname := strings.Split(jt, ",")[0]
 				if jname == "-" {
@@ -279,8 +368,9 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 			}
 		}
 
-		// Snake-case the Go field name if no explicit wire name.
-		if !explicitName {
+		// Snake-case the Go field name if no explicit wire name. Header
+		// fields are not body wire fields, so they get no name.
+		if !explicitName && info.HeaderSource == "" {
 			info.WireName = snakeCase(sf.Name)
 		}
 
@@ -302,15 +392,45 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 	// This makes `sov:"x"` mean "named only" (per PLAN line 661–672)
 	// while keeping the tag-free 80% case purely positional + named
 	// at the same source order.
+	// Auto-position untagged fields into the lowest positional slots NOT taken
+	// by an explicit position, in source order. Tagged (named-only) and header
+	// fields consume NO slot, so an interspersed header= or `sov:"name"` field
+	// no longer punches a gap that fails the contiguity check below.
+	usedPos := map[int]bool{}
+	for i := range fm.Fields {
+		if pendings[i].explicitPos {
+			usedPos[fm.Fields[i].Position] = true
+		}
+	}
+	nextPos := 0
 	for i, p := range pendings {
 		if p.explicitPos || p.hasSovTag {
 			continue
 		}
-		fm.Fields[i].Position = i
+		for usedPos[nextPos] {
+			nextPos++
+		}
+		fm.Fields[i].Position = nextPos
+		usedPos[nextPos] = true
 	}
 
-	// Build ByName + ByPos with validation.
+	// Build ByName + ByPos with validation. Header fields are bound from a
+	// request header, not the body, so they are collected into HeaderFields
+	// and kept OUT of the body wire maps.
+	seenHeader := map[string]bool{}
 	for i, f := range fm.Fields {
+		if f.HeaderSource != "" {
+			// Two fields binding from the same header is a silent
+			// mis-declaration — reject it, mirroring the body duplicate-name
+			// check. Case-insensitive: HTTP header names are.
+			key := strings.ToLower(f.HeaderSource)
+			if seenHeader[key] {
+				return nil, fmt.Errorf("field %s.%s: duplicate sov header= %q", t.Name(), f.GoName, f.HeaderSource)
+			}
+			seenHeader[key] = true
+			fm.HeaderFields = append(fm.HeaderFields, i)
+			continue
+		}
 		if _, dup := fm.ByName[f.WireName]; dup {
 			return nil, fmt.Errorf("field %s.%s: duplicate wire name %q", t.Name(), f.GoName, f.WireName)
 		}
@@ -346,6 +466,192 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 	}
 
 	return fm, nil
+}
+
+// extractHeaderDirective pulls a header=NAME token out of the sov tag parts,
+// returning the remaining tokens and the header name ("" if none). A field is
+// body-bound unless it carries header=. Declaring header= twice, or with an
+// empty name, is a build error.
+func extractHeaderDirective(parts []string, t reflect.Type, sf reflect.StructField) ([]string, string, error) {
+	hdr := ""
+	rest := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if name, ok := strings.CutPrefix(strings.TrimSpace(p), "header="); ok {
+			// Trim, unquote, then trim again — so ` X-Sov-*`, `'X-Sov-*'`, and
+			// `' X-Sov-* '` (inner spaces inside quotes) all resolve to the bare
+			// name before the reserved-namespace check and the lookup.
+			// extractHeaderDirective is a separate pass from applyFieldFlags, so
+			// it must unquote too.
+			name = strings.TrimSpace(unquoteSovValue(strings.TrimSpace(name)))
+			if hdr != "" {
+				return nil, "", fmt.Errorf("field %s.%s: sov tag declares header= more than once", t.Name(), sf.Name)
+			}
+			if name == "" {
+				return nil, "", fmt.Errorf("field %s.%s: sov tag header= has an empty header name", t.Name(), sf.Name)
+			}
+			// The X-Sov-* namespace carries VERIFIED claims injected between
+			// trusted nodes (see gateway ClaimsFromHeaders / TrustUpstreamClaims).
+			// A user param must never bind from that channel — reject it loudly
+			// at boot so a header= can't shadow or read the claim path.
+			if strings.HasPrefix(strings.ToLower(name), "x-sov-") {
+				return nil, "", fmt.Errorf("field %s.%s: sov tag header=%q is in the reserved X-Sov-* claims namespace (verified claims travel there, not user params)", t.Name(), sf.Name, name)
+			}
+			hdr = name
+			continue
+		}
+		rest = append(rest, p)
+	}
+	return rest, hdr, nil
+}
+
+// applyFieldFlags parses the flag/kv tail of a sov tag (omitempty, required,
+// deprecated; title=, desc=, doc=, example=) onto info. Shared by the body
+// form (name,pos,FLAGS) and the header form (header=,FLAGS).
+func applyFieldFlags(info *FieldInfo, opts []string, t reflect.Type, sf reflect.StructField) error {
+	seenKV := map[string]bool{}
+	for _, opt := range opts {
+		opt = strings.TrimSpace(opt)
+		switch opt {
+		case "":
+			// allow trailing comma
+		case "omitempty":
+			info.Omitempty = true
+		case "required":
+			info.Required = true
+		case "deprecated":
+			info.Deprecated = true
+		default:
+			i := strings.IndexByte(opt, '=')
+			if i <= 0 {
+				return fmt.Errorf("field %s.%s: unknown sov tag option %q (flags: omitempty, required, deprecated; kv: title=, desc=, doc=, example=)", t.Name(), sf.Name, opt)
+			}
+			key, value := opt[:i], unquoteSovValue(opt[i+1:])
+			if value == "" {
+				return fmt.Errorf("field %s.%s: empty value for sov tag key %q", t.Name(), sf.Name, key)
+			}
+			if seenKV[key] {
+				return fmt.Errorf("field %s.%s: duplicate sov tag key %q", t.Name(), sf.Name, key)
+			}
+			seenKV[key] = true
+			switch key {
+			case "title":
+				info.Title = value
+			case "desc":
+				info.Desc = value
+			case "doc":
+				info.Doc = value
+			case "example":
+				info.Example = value
+			case "maxlen":
+				n, err := strconv.Atoi(value)
+				if err != nil || n < 0 {
+					return fmt.Errorf("field %s.%s: sov tag maxlen must be a non-negative integer, got %q", t.Name(), sf.Name, value)
+				}
+				info.MaxLen = n
+			default:
+				return fmt.Errorf("field %s.%s: unknown sov tag key %q (allowed: title, desc, doc, example, maxlen)", t.Name(), sf.Name, key)
+			}
+		}
+	}
+	return nil
+}
+
+// isScalarHeaderType reports whether t is a valid header= field type: a scalar
+// (string/bool/int/uint/float) or a pointer to one. Mirrors the kinds
+// setScalarFromString can bind — a header is a single string, so struct, slice,
+// and map are not header-bindable.
+func isScalarHeaderType(t reflect.Type) bool {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
+}
+
+// tagHasHeader reports whether a sov struct tag carries a header= directive.
+// A malformed tag (unbalanced quote) is returned as an error, NOT swallowed —
+// otherwise a nested type whose header= tag fails to parse would slip past
+// RejectNestedHeaders (which is the ONLY validation pass a nested type gets),
+// silently reopening the body-spoofing vector that guard exists to close.
+func tagHasHeader(sovRaw string) (bool, error) {
+	if sovRaw == "" || sovRaw == "-" {
+		return false, nil
+	}
+	toks, err := splitSovTokens(sovRaw)
+	if err != nil {
+		return false, err
+	}
+	for _, tok := range toks {
+		if strings.HasPrefix(strings.TrimSpace(tok), "header=") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// headerStructType returns the struct type reachable from t for nested-header
+// scanning: it dereferences pointers and unwraps slice/array/map element types
+// to a struct, or nil when there is no struct to descend into.
+func headerStructType(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		return t
+	case reflect.Slice, reflect.Array, reflect.Map:
+		return headerStructType(t.Elem())
+	}
+	return nil
+}
+
+// RejectNestedHeaders fails if any struct REACHABLE from a top-level params
+// type (but not the top-level struct's own direct fields) carries a header=
+// tag. A header= is only bound on the top-level params struct; a nested one is
+// never bound AND — because nested structs are decoded by plain json.Unmarshal
+// — would be silently settable from the request body while the published schema
+// shows it absent. So it must be a boot-time error, not a live spoofing vector.
+// Callers pass the handler's params struct type.
+func RejectNestedHeaders(top reflect.Type) error {
+	seen := map[reflect.Type]bool{}
+	var visit func(t reflect.Type, isTop bool) error
+	visit = func(t reflect.Type, isTop bool) error {
+		for t.Kind() == reflect.Ptr {
+			t = t.Elem()
+		}
+		if t.Kind() != reflect.Struct || seen[t] {
+			return nil
+		}
+		seen[t] = true
+		for i := 0; i < t.NumField(); i++ {
+			sf := t.Field(i)
+			if sf.Name == "_" || !sf.IsExported() {
+				continue
+			}
+			if !isTop {
+				has, err := tagHasHeader(sf.Tag.Get("sov"))
+				if err != nil {
+					return fmt.Errorf("field %s.%s: %w", t.Name(), sf.Name, err)
+				}
+				if has {
+					return fmt.Errorf("field %s.%s: sov header= is only valid on a direct field of the top-level params struct, not on a nested or embedded struct field — sov does not flatten embedded structs, so such a field is never bound and would be spoofable from the request body; declare header= fields directly on each params struct", t.Name(), sf.Name)
+				}
+			}
+			if et := headerStructType(sf.Type); et != nil {
+				if err := visit(et, false); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return visit(top, true)
 }
 
 // snakeCase converts a Go-style identifier to snake_case. Conservative:

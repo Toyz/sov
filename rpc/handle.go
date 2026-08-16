@@ -46,6 +46,14 @@ func Handle[P any, R any](e *Engine, router, method string, fn func(ctx *Context
 			if derr := codec.DecodeParams(body, &p, fm); derr != nil {
 				return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
 			}
+			// Header-sourced fields bind after the body decode. Gate on the
+			// precomputed slice so the reflection-free fast path stays
+			// alloc-free when the params struct has no header= fields.
+			if len(fm.HeaderFields) > 0 {
+				if herr := bindHeaderFields(reflect.ValueOf(&p), fm, ctx); herr != nil {
+					return encodeErrorWith(codec, herr)
+				}
+			}
 		}
 		r, err := fn(ctx, &p)
 		if err != nil {
@@ -81,6 +89,14 @@ func HandleErr[P any](e *Engine, router, method string, fn func(ctx *Context, p 
 			if derr := codec.DecodeParams(body, &p, fm); derr != nil {
 				return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
 			}
+			// Header-sourced fields bind after the body decode. Gate on the
+			// precomputed slice so the reflection-free fast path stays
+			// alloc-free when the params struct has no header= fields.
+			if len(fm.HeaderFields) > 0 {
+				if herr := bindHeaderFields(reflect.ValueOf(&p), fm, ctx); herr != nil {
+					return encodeErrorWith(codec, herr)
+				}
+			}
 		}
 		if err := fn(ctx, &p); err != nil {
 			return encodeErrorWith(codec, asRPCError(err, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
@@ -104,6 +120,9 @@ func typedParamMap(pt reflect.Type, router, method string) (*FieldMap, bool) {
 	if err != nil {
 		panic("rpc.Handle: " + router + "." + method + " params " + pt.String() + ": " + err.Error())
 	}
+	if err := RejectNestedHeaders(pt); err != nil {
+		panic("rpc.Handle: " + router + "." + method + " params " + pt.String() + ": " + err.Error())
+	}
 	return fm, true
 }
 
@@ -121,6 +140,9 @@ func (e *Engine) registerTyped(router, method string, entry *methodEntry) {
 	}
 	if _, dup := methods[method]; dup {
 		panic("rpc.Handle: " + router + "." + method + " already registered")
+	}
+	if entry.fieldMap != nil && len(entry.fieldMap.HeaderFields) > 0 {
+		e.needsHeaderGetter.Store(true)
 	}
 	methods[method] = entry
 }

@@ -4,10 +4,19 @@
 // from any caller whose X-Sov-Upstream header is not on the list —
 // the request proceeds as anonymous, not 401.
 //
+// SECURITY: this is a coarse NETWORK-TOPOLOGY FILTER, NOT authentication.
+// X-Sov-Upstream is a plain client-supplied header with no cryptographic
+// proof — a caller who can reach the pod directly can set it to an allowed
+// value and forge X-Sov-Subject. On an untrusted network you MUST pair
+// TrustUpstreamClaims with a SealVerifier (hmacseal, keyed to the mesh
+// secret); upstreams alone helps only when the network already isolates the
+// pod behind the trusted gateway. The gateway warns at boot when trust is on
+// with no SealVerifier, regardless of this plugin.
+//
 // Plugin owns the allowlist + the decision via UpstreamTrustPolicy.
 // Framework holds no upstream-allowlist state.
 //
-//	gw.Use(upstreams.New("http://prime:8080", "http://edge:8080"))
+//	gw.Use(upstreams.New(upstreams.Config{Allowed: []string{"http://prime:8080"}}))
 package upstreams
 
 import (
@@ -39,7 +48,14 @@ var (
 )
 
 // New returns an upstream-allowlist plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("upstreams.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	m := make(map[string]struct{}, len(cfg.Allowed))
 	for _, raw := range cfg.Allowed {
 		canon, err := gateway.NormalizeUpstreamURL(raw)

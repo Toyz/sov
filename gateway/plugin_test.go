@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	. "github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 
 	"context"
 	"encoding/json"
@@ -74,7 +75,7 @@ func (r *recordingPlugin) ContributeIntrospect(_ context.Context, report *Intros
 // ---- Tests ----------------------------------------------------------------
 
 func TestPlugin_AutoDetectHooks(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	p := &recordingPlugin{name: "rec"}
 	if err := gw.Use(p); err != nil {
 		t.Fatalf("Use: %v", err)
@@ -112,7 +113,7 @@ func TestPlugin_AutoDetectHooks(t *testing.T) {
 }
 
 func TestPlugin_DispatchHookFires(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&EchoRouter{})
 	p := &recordingPlugin{name: "rec"}
 	_ = gw.Use(p)
@@ -132,7 +133,7 @@ func TestPlugin_DispatchHookFires(t *testing.T) {
 }
 
 func TestPlugin_RejectsEmptyContract(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	type bareType struct{}
 	err := gw.Use(&bareType{})
 	if err == nil {
@@ -185,7 +186,7 @@ func TestPlugin_IntrospectListsPlugins(t *testing.T) {
 }
 
 func TestPlugin_OrderingMatchesRegistration(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&EchoRouter{})
 	a := &recordingPlugin{name: "a"}
 	b := &recordingPlugin{name: "b"}
@@ -233,7 +234,7 @@ func (p *customRoutePlugin) ServeRoute(_ context.Context, req *Request) *Respons
 }
 
 func TestPlugin_RouteHandler_ExactMatch(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	p := &customRoutePlugin{patterns: []string{"/admin/ping"}}
 	if err := gw.Use(p); err != nil {
 		t.Fatalf("Use: %v", err)
@@ -253,7 +254,7 @@ func TestPlugin_RouteHandler_ExactMatch(t *testing.T) {
 }
 
 func TestPlugin_RouteHandler_SubtreeMatch(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	p := &customRoutePlugin{patterns: []string{"/admin/"}}
 	if err := gw.Use(p); err != nil {
 		t.Fatalf("Use: %v", err)
@@ -272,7 +273,7 @@ func TestPlugin_RouteHandler_SubtreeMatch(t *testing.T) {
 }
 
 func TestPlugin_RouteHandler_CannotShadowFramework(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	p := &customRoutePlugin{patterns: []string{"/rpc/_health"}}
 	if err := gw.Use(p); err != nil {
 		t.Fatalf("Use: %v", err)
@@ -289,7 +290,7 @@ func TestPlugin_RouteHandler_CannotShadowFramework(t *testing.T) {
 }
 
 func TestPlugin_AlsoARouter(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	d := &DualRouter{}
 	if err := gw.Use(d); err != nil {
 		t.Fatalf("Use: %v", err)

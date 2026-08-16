@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,7 +24,12 @@ type Gateway struct {
 	server        Server
 	register      *RegisterResolver
 	proxy         *http.Client
-	dispatch      Handler // wrapped chain (middleware → handle)
+	breakers      *breakerManager // per-upstream circuit breaker on remote dispatch
+	serving       atomic.Int32    // serving state (starting|ready|draining) for /rpc/_ready
+	inFlight      atomic.Int64    // requests currently in the dispatch chain (in-flight gauge)
+	maxInFlight   int64           // load-shed cap; 0 = unlimited
+	retry         RetryConfig     // bounded remote-dispatch retry (W1.4); off unless MaxAttempts>1
+	dispatch      Handler         // wrapped chain (middleware → handle)
 
 	// Auth + authz bindings. Both optional. The gateway calls the
 	// designated service via its own dispatch path for every request
@@ -51,6 +57,11 @@ type Gateway struct {
 	// in-process via IntrospectBody — the explorer and federation use that
 	// directly, so they keep working without the public endpoint being open.
 	introspectExposed bool
+
+	// configExposed gates the opt-in /rpc/_config runtime-config dump. OFF by
+	// default — the report is sanitized (no secrets) but still discloses
+	// operational topology, so it is opened only via gw.Use(configdump.New()).
+	configExposed bool
 
 	// muMiddleware guards dynamic Use() appends after construction.
 	muMiddleware sync.Mutex
@@ -86,6 +97,52 @@ type Options struct {
 	// Redis/memcached-backed impl to share auth-verify results across a
 	// fleet of gateway replicas. Default: per-replica in-memory.
 	ClaimsCache ClaimsCache
+	// AuthCacheTTL caps how long a verified bearer is trusted from the DEFAULT
+	// cache before re-verifying against the auth service — the bound on
+	// revocation lag (and the only bound for a token with no expiry). Default
+	// 5m when 0. Ignored when a custom ClaimsCache is supplied (that impl owns
+	// its own TTL). Set very large to effectively disable the cap.
+	AuthCacheTTL time.Duration
+	// RemoteBreaker tunes the per-upstream circuit breaker on remote
+	// dispatch (default: 5 consecutive failures → open, 10s cooldown). Set
+	// RemoteBreaker.Disabled to turn it off.
+	RemoteBreaker BreakerConfig
+	// MaxInFlight load-sheds: when more than this many requests are being
+	// handled concurrently, further requests get an immediate retryable 503
+	// OVERLOADED instead of being accepted and exhausting goroutines/FDs.
+	// 0 (default) = unlimited.
+	MaxInFlight int
+	// Retry bounds automatic retry of a failed REMOTE dispatch (W1.4). Off by
+	// default; see RetryConfig + WithRetries.
+	Retry RetryConfig
+}
+
+// RetryConfig bounds automatic retry of a failed REMOTE dispatch (W1.4). Retry
+// is OFF by default (MaxAttempts <= 1); enable it with WithRetries. A retry
+// re-resolves onto a DIFFERENT replica (round-robin; open breakers skipped).
+// Only a provably-never-executed failure (breaker open / dial refused) is
+// retried unconditionally; an ambiguous failure (timeout) or an upstream 5xx is
+// retried ONLY when the request carries an Idempotency-Key, so a non-idempotent
+// op is never silently re-sent. Backoff is exponential with full jitter and
+// never sleeps past the request deadline (W1.2).
+type RetryConfig struct {
+	MaxAttempts int           // total attempts including the first; <=1 disables retry
+	BaseBackoff time.Duration // first-retry backoff; default 20ms
+	MaxBackoff  time.Duration // backoff cap; default 1s
+}
+
+// normalizeRetry fills defaults; MaxAttempts<=1 leaves retry disabled.
+func normalizeRetry(c RetryConfig) RetryConfig {
+	if c.MaxAttempts < 1 {
+		c.MaxAttempts = 1
+	}
+	if c.BaseBackoff <= 0 {
+		c.BaseBackoff = 20 * time.Millisecond
+	}
+	if c.MaxBackoff <= 0 {
+		c.MaxBackoff = time.Second
+	}
+	return c
 }
 
 // Middleware wraps the gateway's request handler. Return a non-nil
@@ -142,10 +199,39 @@ func WithMiddleware(mw ...Middleware) Option {
 	return func(o *Options) { o.Middleware = append(o.Middleware, mw...) }
 }
 
+// WithRemoteBreaker tunes the per-upstream circuit breaker on remote dispatch.
+// See Options.RemoteBreaker.
+func WithRemoteBreaker(cfg BreakerConfig) Option {
+	return func(o *Options) { o.RemoteBreaker = cfg }
+}
+
+// WithAuthCacheTTL caps how long a verified bearer is trusted from the default
+// claims cache before re-verifying — the revocation-lag bound. See
+// Options.AuthCacheTTL.
+func WithAuthCacheTTL(d time.Duration) Option {
+	return func(o *Options) { o.AuthCacheTTL = d }
+}
+
+// WithMaxInFlight load-sheds: concurrent requests above n get a retryable 503
+// OVERLOADED. 0 = unlimited. See Options.MaxInFlight.
+func WithMaxInFlight(n int) Option {
+	return func(o *Options) { o.MaxInFlight = n }
+}
+
+// WithRetries enables bounded automatic retry of failed remote dispatches
+// (W1.4). See RetryConfig. cfg.MaxAttempts <= 1 leaves retry off.
+func WithRetries(cfg RetryConfig) Option {
+	return func(o *Options) { o.Retry = cfg }
+}
+
 // New constructs a Gateway. All Options are optional — the bare
 // gateway.New() returns a usable standalone gateway with sensible
 // defaults. The gateway always owns its rpc.Engine internally; reach
 // it via g.Engine() only for power-user escape hatches.
+//
+// New panics on an Option carrying config it cannot honor — e.g.
+// WithAdvertiseURL with an unparseable URL — so a misconfigured gateway
+// fails loudly at construction rather than silently mis-routing later.
 func New(opts ...Option) *Gateway {
 	o := &Options{}
 	for _, fn := range opts {
@@ -176,7 +262,11 @@ func New(opts ...Option) *Gateway {
 		o.ProxyClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	if o.ClaimsCache == nil {
-		o.ClaimsCache = newMemClaimsCache()
+		ttl := o.AuthCacheTTL
+		if ttl == 0 {
+			ttl = 5 * time.Minute
+		}
+		o.ClaimsCache = newMemClaimsCache(ttl)
 	}
 	g := &Gateway{
 		engine:        eng,
@@ -187,6 +277,9 @@ func New(opts ...Option) *Gateway {
 		proxy:         o.ProxyClient,
 		authCache:     o.ClaimsCache,
 		middlewares:   append([]Middleware{}, o.Middleware...),
+		breakers:      newBreakerManager(o.RemoteBreaker),
+		maxInFlight:   int64(o.MaxInFlight),
+		retry:         normalizeRetry(o.Retry),
 	}
 	g.defaultRecovery = &defaultRecoveryHandler{gw: g}
 	// Route rpc.Engine boot warnings (HELL-281) through the gateway's
@@ -195,6 +288,10 @@ func New(opts ...Option) *Gateway {
 	// honored.
 	eng.SetLogger(engineLogger{g: g})
 	g.register.onChange = g.invalidateCatalog
+	// Let the resolver skip replicas whose breaker is open when picking one
+	// (W1.1). Non-mutating read; the dispatch path still owns the half-open
+	// probe. Safe even when the breaker is disabled — isOpen returns false.
+	g.register.breakerOpen = g.breakers.isOpen
 	if o.AdvertiseURL != "" {
 		canon, err := NormalizeUpstreamURL(o.AdvertiseURL)
 		if err != nil {
@@ -244,7 +341,7 @@ func New(opts ...Option) *Gateway {
 func (g *Gateway) rebuildChain() {
 	g.muMiddleware.Lock()
 	defer g.muMiddleware.Unlock()
-	all := []Middleware{g.authMiddleware(), g.authzMiddleware()}
+	all := []Middleware{g.recordDispatchMiddleware(), g.authMiddleware(), g.authzMiddleware()}
 	all = append(all, g.middlewares...)
 	chain := g.innerHandler
 	for i := len(all) - 1; i >= 0; i-- {
@@ -320,6 +417,10 @@ func (g *Gateway) Engine() *rpc.Engine { return g.engine }
 func (g *Gateway) Register(router any) {
 	g.engine.Register(router)
 	g.autoBindRoles(router)
+	// A router registered after the catalog warmed must show up in
+	// introspection-driven surfaces (MCP tools/list, explorer) immediately,
+	// not after the 30s TTL — same invalidation a remote join/leave triggers.
+	g.invalidateCatalog()
 }
 
 // RegisterResolver returns the gateway's register-based remote resolver
@@ -383,8 +484,10 @@ func (g *Gateway) ListenAndServe(ctx context.Context, addr string) error {
 	// when the network between gateway and pod is not trusted. We warn
 	// (not refuse) when trust is on with no verifier so the operator knows
 	// the pod is relying on network isolation to keep X-Sov-Subject honest.
-	if g.trustUpstreamWired && !g.hasSealVerifier() && !g.hasUpstreamTrust() {
-		g.Log().Warn("gateway: trusting inbound X-Sov-* claims with no SealVerifier/UpstreamTrustPolicy — relying on network isolation to keep identity honest. Add gw.Use(hmacseal.New(...)) (keyed to your mesh secret) to require cryptographic proof on untrusted networks.")
+	if g.trustUpstreamWired && !g.hasSealVerifier() {
+		g.Log().Warn("gateway: trusting inbound X-Sov-* claims with no SealVerifier — identity is only as safe as the network. " +
+			"An upstream-allowlist filter (the upstreams plugin) is NOT cryptographic proof: it matches a client-supplied X-Sov-Upstream header and cannot stop a caller who reaches the pod directly from forging X-Sov-Subject. " +
+			"Add gw.Use(hmacseal.New(...)) keyed to your mesh secret to require cryptographic proof on untrusted networks.")
 	}
 	if err := g.reorderPluginsByDependency(); err != nil {
 		return err
@@ -400,6 +503,14 @@ func (g *Gateway) ListenAndServe(ctx context.Context, addr string) error {
 	if err := g.callLifecycleStart(ctx); err != nil {
 		return fmt.Errorf("gateway: lifecycle start failed: %w", err)
 	}
+	// Now serving: /rpc/_ready flips to 200. On ctx cancel it flips to draining
+	// (503) BEFORE the server's graceful drain runs, so an orchestrator stops
+	// routing NEW traffic here while in-flight requests finish.
+	g.serving.Store(servingReady)
+	go func() {
+		<-ctx.Done()
+		g.serving.Store(servingDraining)
+	}()
 	defer g.callLifecycleStop(context.Background())
 	return g.server.ListenAndServe(ctx, addr)
 }

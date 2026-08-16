@@ -9,6 +9,7 @@ import (
 
 	. "github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/batch"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -37,7 +38,7 @@ func (bnEchoRouter) Say(ctx *rpc.Context, p *bnEchoParams) (string, error) { ret
 // The negotiated codec is reflected on the response Content-Type so the
 // caller decodes the body with the codec it sent.
 func TestCodec_ResponseContentTypeReflectsCodec(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 	gw.Engine().RegisterCodec(testCodec{})
@@ -56,7 +57,7 @@ func TestCodec_ResponseContentTypeReflectsCodec(t *testing.T) {
 // no-op test decode would drop the param and Say would echo "" instead of
 // the sent value.
 func TestCodec_BatchEntriesPinnedToJSON(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&bnEchoRouter{})
 	gw.Engine().RegisterCodec(testCodec{})
@@ -81,7 +82,7 @@ func TestCodec_BatchEntriesPinnedToJSON(t *testing.T) {
 // A registered codec is selected PER REQUEST by Content-Type; absent it, the
 // JSON default is used.
 func TestCodec_NegotiatedPerRequest(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 	gw.Engine().RegisterCodec(testCodec{})
@@ -112,7 +113,7 @@ func TestCodec_NegotiatedPerRequest(t *testing.T) {
 // business codec: authz short-circuits in authzMiddleware, before the
 // engine's per-request codec ever applies.
 func TestCodec_InternalAuthzStaysJSON(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.RegisterAuthz(&AuthzRouter{denyMethod: "me"})
 	gw.Register(&WhoRouter{})
@@ -129,5 +130,29 @@ func TestCodec_InternalAuthzStaysJSON(t *testing.T) {
 	// CheckParams as JSON internally) and that framework errors stay JSON.
 	if !strings.Contains(string(resp.Body), `"code":"FORBIDDEN"`) {
 		t.Fatalf("authz deny not JSON-framed: %s", resp.Body)
+	}
+}
+
+// SetCodec swaps the ENGINE DEFAULT to a non-JSON codec. The internal auth
+// verify sub-dispatch must STILL decode its VerifyParams as JSON — it is pinned
+// via Content-Type: application/json — or the bearer is silently dropped by the
+// swapped default's no-op decode and the call 401s (or worse, fails open).
+// RegisterCodec (which keeps JSON the default) never exposes this; only
+// SetCodec does, so the other codec tests miss it.
+func TestCodec_AuthVerifyPinnedJSON_UnderSetCodecDefault(t *testing.T) {
+	gw := gwtest.New()
+	gw.RegisterAuth(&AuthRouter{})
+	gw.Register(&WhoRouter{})
+	gw.Engine().SetCodec(testCodec{}) // non-JSON codec becomes the DEFAULT
+
+	resp := gw.Handle(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/Who/me",
+		Header: Header{"Authorization": "Bearer good-x"}, // no business Content-Type
+	})
+	// 200 proves verify decoded "good-x" as JSON. Pre-fix the verify sub-dispatch
+	// inherited the swapped default (testCodec's no-op decode), dropped Token,
+	// and 401'd.
+	if resp.Status != 200 {
+		t.Fatalf("auth under SetCodec(non-JSON default) = %d, want 200 (verify must be JSON-pinned); body=%s", resp.Status, resp.Body)
 	}
 }

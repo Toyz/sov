@@ -45,17 +45,6 @@ Benchmarks: `rpc/bench_test.go` (`EngineDispatchLocal`) and `gateway/bench_test.
 Numbers above were captured on the maintainer's machine (Linux, Go 1.26, 32-thread). Absolute ns/op
 is hardware-specific — what's stable is the *ratio* between local, remote, and batched.
 
-## Regression guard
-
-`scripts/bench-guard.sh` runs the benchmarks and fails if any regresses past a generous threshold
-(default 80%) versus `bench/baseline.txt`:
-
-```sh
-scripts/bench-guard.sh              # check (CI uses this)
-scripts/bench-guard.sh --update     # re-baseline after an intentional change / new hardware
-```
-
-It is deliberately coarse and dependency-free (no `benchstat`): microbenchmarks are noisy and CI
-hardware differs from wherever the baseline was captured, so the guard catches **catastrophic**
-regressions (a 2× blow-up from an accidental per-call allocation or a dropped cache), not small
-drift. CI runs it via `.github/workflows/bench.yml`.
+Run them yourself with `make bench`. There is no automated regression gate — microbenchmarks are
+too noisy on shared CI runners to gate on; compare runs manually on the same machine when you change
+a hot path.

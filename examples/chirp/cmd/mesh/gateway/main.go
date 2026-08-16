@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 
@@ -36,7 +37,9 @@ func main() {
 	gw.MustUse(manifest.New(manifest.Config{}))
 
 	log.Printf("chirp mesh gateway on %s — registry mode, mesh-secret gated", addr)
-	if err := gw.Run(context.Background(), addr); err != nil {
+	ctx, stop := sov.ShutdownContext()
+	defer stop()
+	if err := gw.Run(ctx, addr); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
 }

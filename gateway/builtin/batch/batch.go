@@ -36,17 +36,40 @@ import (
 // address returned 404 on /rpc/_batch.
 const defaultUnsupportedTTL = 60 * time.Second
 
+// Fan-out bounds. A batch is a per-request goroutine + sub-dispatch
+// multiplier, so leaving it unbounded is a resource-exhaustion vector; both
+// axes are capped by default (HELL-296).
+const (
+	// defaultMaxBatchSize caps entries in one batch; a larger batch is
+	// rejected before any fan-out.
+	defaultMaxBatchSize = 500
+	// defaultMaxConcurrency caps how many entries dispatch at once within a
+	// batch, independent of batch size.
+	defaultMaxConcurrency = 32
+)
+
 // Config configures the batch plugin. UnsupportedTTL is the cache
 // window for "pod doesn't support /rpc/_batch" answers; zero falls
 // back to 60s.
 type Config struct {
 	UnsupportedTTL time.Duration
+	// MaxBatchSize caps the number of entries in one /rpc/_batch call. A
+	// batch with more entries is rejected 413 before any fan-out. Zero uses
+	// the default (500). A hard cap is intentional: an unbounded batch is a
+	// fan-out DoS vector — raise this explicitly if a workload needs more.
+	MaxBatchSize int
+	// MaxConcurrency caps how many entries dispatch concurrently within one
+	// batch (a worker-pool semaphore). Zero uses the default (32). Bounds
+	// goroutine and downstream load regardless of batch size.
+	MaxConcurrency int
 }
 
 // Plugin is the batch route owner returned by New.
 type Plugin struct {
 	gw             *gateway.Gateway
 	unsupportedTTL time.Duration
+	maxBatchSize   int
+	maxConcurrency int
 	muSupp         sync.RWMutex
 	missing        map[string]time.Time
 }
@@ -54,23 +77,52 @@ type Plugin struct {
 // Compile-time proof of the hooks this plugin binds — a signature
 // drift here is a build error, not a silent non-binding at runtime.
 var (
-	_ gateway.Plugin        = (*Plugin)(nil)
-	_ gateway.PluginDoc     = (*Plugin)(nil)
-	_ gateway.ConfigApplier = (*Plugin)(nil)
-	_ gateway.RouteHandler  = (*Plugin)(nil)
+	_ gateway.Plugin           = (*Plugin)(nil)
+	_ gateway.PluginDoc        = (*Plugin)(nil)
+	_ gateway.ConfigApplier    = (*Plugin)(nil)
+	_ gateway.RouteHandler     = (*Plugin)(nil)
+	_ gateway.PluginDependency = (*Plugin)(nil)
 )
 
 // New returns the batch plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("batch.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	ttl := cfg.UnsupportedTTL
 	if ttl <= 0 {
 		ttl = defaultUnsupportedTTL
 	}
-	return &Plugin{missing: map[string]time.Time{}, unsupportedTTL: ttl}
+	maxBatch := cfg.MaxBatchSize
+	if maxBatch <= 0 {
+		maxBatch = defaultMaxBatchSize
+	}
+	maxConc := cfg.MaxConcurrency
+	if maxConc <= 0 {
+		maxConc = defaultMaxConcurrency
+	}
+	return &Plugin{
+		missing:        map[string]time.Time{},
+		unsupportedTTL: ttl,
+		maxBatchSize:   maxBatch,
+		maxConcurrency: maxConc,
+	}
 }
 
 // PluginName surfaces in /rpc/_introspect.plugins[].
 func (p *Plugin) PluginName() string { return "batch" }
+
+// Requires the rpc surface: batch fans each entry out through gw.Handle to
+// /rpc/{service}/{method}, so without the rpc builtin every entry 404s. Fail
+// fast at boot instead of per-entry at request time. (Requires AND After are
+// BOTH needed to satisfy gateway.PluginDependency — one alone is a silent
+// non-binding.)
+func (p *Plugin) Requires() []string { return []string{"rpc"} }
+func (p *Plugin) After() []string    { return nil }
 
 // Doc surfaces a one-line description in /rpc/_introspect + the explorer.
 func (p *Plugin) Doc() string {
@@ -95,6 +147,15 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 	if len(br.Calls) == 0 {
 		return gateway.ErrorResponse(rpc.BadRequest("calls is empty"))
 	}
+	if len(br.Calls) > p.maxBatchSize {
+		return gateway.ErrorResponse(&rpc.Error{Status: http.StatusRequestEntityTooLarge, Code: "BAD_REQUEST",
+			Message: fmt.Sprintf("batch too large: %d calls exceeds limit %d", len(br.Calls), p.maxBatchSize)})
+	}
+
+	// Bound concurrent entry dispatch across the whole request. Shared by
+	// every group's per-entry fan-out so total in-flight sub-dispatches never
+	// exceed maxConcurrency, regardless of batch size or group count.
+	sem := make(chan struct{}, p.maxConcurrency)
 
 	groups, results := p.groupBatch(ctx, br)
 
@@ -105,7 +166,7 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 		for _, grp := range groups {
 			go func(grp *batchGroup) {
 				defer wg.Done()
-				partial := p.dispatchGroup(ctx, req, grp)
+				partial := p.dispatchGroup(ctx, req, grp, sem)
 				mu.Lock()
 				for alias, body := range partial {
 					results[alias] = body
@@ -161,21 +222,24 @@ func (p *Plugin) groupBatch(ctx context.Context, br gateway.BatchRequest) ([]*ba
 	return groups, results
 }
 
-func (p *Plugin) dispatchGroup(ctx context.Context, parent *gateway.Request, grp *batchGroup) map[string]json.RawMessage {
+func (p *Plugin) dispatchGroup(ctx context.Context, parent *gateway.Request, grp *batchGroup, sem chan struct{}) map[string]json.RawMessage {
 	if grp.isLocal || len(grp.calls) == 1 {
-		return p.dispatchPerEntry(ctx, parent, grp.calls)
+		return p.dispatchPerEntry(ctx, parent, grp.calls, sem)
 	}
 	if p.unsupported(grp.addr) {
-		return p.dispatchPerEntry(ctx, parent, grp.calls)
+		return p.dispatchPerEntry(ctx, parent, grp.calls, sem)
 	}
 	results, fellBack := p.dispatchRemoteBatch(ctx, parent, grp.addr, grp.calls)
 	if fellBack {
-		return p.dispatchPerEntry(ctx, parent, grp.calls)
+		return p.dispatchPerEntry(ctx, parent, grp.calls, sem)
 	}
 	return results
 }
 
-func (p *Plugin) dispatchPerEntry(ctx context.Context, parent *gateway.Request, calls map[string]gateway.BatchCall) map[string]json.RawMessage {
+// dispatchPerEntry fans one entry per goroutine but gates the actual dispatch
+// on sem, so at most cap(sem) entries run concurrently. Goroutine count is
+// bounded too — the caller already rejected batches over maxBatchSize.
+func (p *Plugin) dispatchPerEntry(ctx context.Context, parent *gateway.Request, calls map[string]gateway.BatchCall, sem chan struct{}) map[string]json.RawMessage {
 	out := make(map[string]json.RawMessage, len(calls))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -183,6 +247,8 @@ func (p *Plugin) dispatchPerEntry(ctx context.Context, parent *gateway.Request, 
 	for alias, call := range calls {
 		go func(alias string, call gateway.BatchCall) {
 			defer wg.Done()
+			sem <- struct{}{}        // acquire a concurrency slot
+			defer func() { <-sem }() // release it
 			r := p.runOne(ctx, parent, call)
 			mu.Lock()
 			out[alias] = r

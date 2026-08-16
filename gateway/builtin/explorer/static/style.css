@@ -488,3 +488,52 @@ pre {
   padding: 40px;
   text-align: center;
 }
+
+/* Header-bound params (sov:"header=..."): ambient inputs sent as real HTTP
+   headers, not args. Badged distinctly (warn/orange) from body fields. */
+.fields-table .src-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--warn);
+  background: rgba(255, 184, 108, 0.12);
+  border: 1px solid rgba(255, 184, 108, 0.35);
+  border-radius: 10px;
+  padding: 1px 6px;
+}
+.header-params-head {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.header-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.header-input {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+}
+.header-input .header-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--warn);
+}
+.header-input input {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+.header-input input:focus {
+  outline: none;
+  border-color: var(--accent);
+}

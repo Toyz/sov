@@ -29,18 +29,24 @@ type ErrorResponse struct {
 }
 
 type errorBody struct {
-	Message   string `json:"message"`
-	Code      string `json:"code,omitempty"`
-	ErrorCode string `json:"error_code,omitempty"`
+	Message    string       `json:"message"`
+	Code       string       `json:"code,omitempty"`
+	ErrorCode  string       `json:"error_code,omitempty"`
+	Retryable  bool         `json:"retryable,omitempty"`
+	RetryAfter int          `json:"retry_after,omitempty"`
+	Details    []FieldError `json:"details,omitempty"`
 }
 
 // MarshalError builds the JSON body for an Error. Transport adapters use
 // this when writing the response.
 func MarshalError(e *Error) []byte {
 	body, _ := json.Marshal(ErrorResponse{Error: errorBody{
-		Message:   e.Message,
-		Code:      e.Code,
-		ErrorCode: e.ErrorCode,
+		Message:    e.Message,
+		Code:       e.Code,
+		ErrorCode:  e.ErrorCode,
+		Retryable:  e.Retryable,
+		RetryAfter: e.RetryAfter,
+		Details:    e.Details,
 	}})
 	return body
 }
@@ -62,10 +68,13 @@ func DecodeErrorBody(body []byte, status int) (e *Error, ok bool) {
 		return nil, false
 	}
 	return &Error{
-		Status:    status,
-		Code:      env.Error.Code,
-		ErrorCode: env.Error.ErrorCode,
-		Message:   env.Error.Message,
+		Status:     status,
+		Code:       env.Error.Code,
+		ErrorCode:  env.Error.ErrorCode,
+		Message:    env.Error.Message,
+		Retryable:  env.Error.Retryable,
+		RetryAfter: env.Error.RetryAfter,
+		Details:    env.Error.Details,
 	}, true
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/batch"
 	"github.com/Toyz/sov/gateway/builtin/registry"
+	rpcsurface "github.com/Toyz/sov/gateway/builtin/rpc"
 )
 
 // buildMonolith mirrors examples/chirp/cmd/monolith/main.go so the test
@@ -31,6 +32,9 @@ import (
 func buildMonolith(t *testing.T) *sov.Gateway {
 	t.Helper()
 	gw := sov.New()
+	if err := gw.Use(rpcsurface.New()); err != nil {
+		t.Fatalf("Use rpc: %v", err)
+	}
 	if err := gw.Use(registry.New(registry.Config{})); err != nil {
 		t.Fatalf("Use registry: %v", err)
 	}

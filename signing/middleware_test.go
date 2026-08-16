@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Toyz/sov/gateway"
+	rpcsurface "github.com/Toyz/sov/gateway/builtin/rpc"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -39,6 +40,7 @@ func newGW(t *testing.T) (*gateway.Gateway, *MemoryStore, time.Time) {
 		SkipMethods: []string{"Session/init"},
 	})
 	gw := gateway.New(gateway.WithMiddleware(mw))
+	gw.MustUse(rpcsurface.New())
 	gw.Register(&EchoRouter{})
 	gw.Register(&SessionRouter{})
 	return gw, store, now

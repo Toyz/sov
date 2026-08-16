@@ -14,6 +14,38 @@ type Error struct {
 	Code      string `json:"code,omitempty"`
 	ErrorCode string `json:"error_code,omitempty"`
 	Status    int    `json:"-"`
+	// Retryable signals the caller MAY safely retry — a transient failure
+	// (rate limit, upstream unavailable, timeout). false means permanent; a
+	// client should not retry. Generated clients key their retry logic on this.
+	Retryable bool `json:"retryable,omitempty"`
+	// RetryAfter, when > 0, is the seconds a client should wait before retrying.
+	RetryAfter int `json:"retry_after,omitempty"`
+	// Details carries per-field failures so a client can map a BAD_REQUEST to
+	// the exact form field that failed instead of a single opaque message.
+	Details []FieldError `json:"details,omitempty"`
+}
+
+// FieldError is one field-level failure, carried in Error.Details.
+type FieldError struct {
+	Field   string `json:"field"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
+// Retry marks the error retryable, optionally with a retry-after (seconds), and
+// returns it for chaining: return rpc.Internal("upstream blip").Retry(1).
+func (e *Error) Retry(afterSeconds ...int) *Error {
+	e.Retryable = true
+	if len(afterSeconds) == 1 {
+		e.RetryAfter = afterSeconds[0]
+	}
+	return e
+}
+
+// WithDetails attaches field-level failures and returns the error for chaining.
+func (e *Error) WithDetails(d ...FieldError) *Error {
+	e.Details = append(e.Details, d...)
+	return e
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -67,5 +99,5 @@ func NotImplemented(msg string, args ...any) *Error {
 
 // TooManyRequests returns 429 RATE_LIMITED.
 func TooManyRequests(msg string, args ...any) *Error {
-	return &Error{Message: fmt.Sprintf(msg, args...), Code: "RATE_LIMITED", Status: 429}
+	return &Error{Message: fmt.Sprintf(msg, args...), Code: "RATE_LIMITED", Status: 429, Retryable: true}
 }

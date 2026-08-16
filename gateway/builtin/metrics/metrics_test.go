@@ -10,6 +10,7 @@ import (
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/metrics"
 	"github.com/Toyz/sov/gateway/builtin/requestid"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -27,7 +28,7 @@ func mustUse(t *testing.T, gw *gateway.Gateway, plugins ...any) {
 }
 
 func TestMetrics_RequiresRequestID(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	if err := gw.Use(metrics.New(metrics.Config{})); err != nil {
 		t.Fatalf("Use accepts plugins in any order: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestMetrics_RequiresRequestID(t *testing.T) {
 }
 
 func TestMetrics_DispatchAndExpose(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	mustUse(t, gw,
 		requestid.New(requestid.Config{}),
 		metrics.New(metrics.Config{}),
@@ -85,7 +86,7 @@ func TestMetrics_DispatchAndExpose(t *testing.T) {
 }
 
 func TestMetrics_SnapshotCapability(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	mustUse(t, gw,
 		requestid.New(requestid.Config{}),
 		metrics.New(metrics.Config{}),
@@ -99,7 +100,7 @@ func TestMetrics_SnapshotCapability(t *testing.T) {
 		})
 	}
 
-	snap, ok := gateway.GetCapability[metrics.Snapshot](gw, "metrics.Snapshot")
+	snap, ok := gateway.GetCapability[metrics.SnapshotFunc](gw, "metrics.Snapshot")
 	if !ok {
 		t.Fatal("metrics.Snapshot capability not published")
 	}
@@ -120,7 +121,7 @@ func TestMetrics_SnapshotCapability(t *testing.T) {
 }
 
 func TestMetrics_IntrospectAugment(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	gw.ExposeIntrospect() // endpoint is opt-in; this test reads its body
 	mustUse(t, gw,
 		requestid.New(requestid.Config{}),

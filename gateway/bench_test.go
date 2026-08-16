@@ -11,12 +11,13 @@ import (
 
 	. "github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/batch"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 )
 
 // BenchmarkHandleLocal: full gateway dispatch (middleware chain + engine)
 // for an in-process service. The PEMM "local" mode — no network.
 func BenchmarkHandleLocal(b *testing.B) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&EchoRouter{})
 	req := &Request{Method: http.MethodPost, Path: "/rpc/Echo/ping", Header: Header{}, Body: []byte(`{"args":{}}`)}
 
@@ -40,7 +41,7 @@ func BenchmarkHandleRemote(b *testing.B) {
 	}))
 	defer remote.Close()
 
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterRemote("Echo", remote.URL, time.Minute)
 	req := &Request{Method: http.MethodPost, Path: "/rpc/Echo/ping", Header: Header{}, Body: []byte(`{"args":{}}`)}
 
@@ -76,7 +77,7 @@ func BenchmarkBatchCoalesce(b *testing.B) {
 	}))
 	defer remote.Close()
 
-	gw := New()
+	gw := gwtest.New()
 	if err := gw.Use(batch.New(batch.Config{})); err != nil {
 		b.Fatalf("use batch: %v", err)
 	}

@@ -101,8 +101,8 @@ RID=$(echo "$RID_RESP" | grep -i '^x-sov-request-id:' | tr -d '\r' | awk '{print
 [[ -n "$RID" ]] || { echo "FAIL: empty request id"; exit 1; }
 echo "  request-id=$RID"
 
-echo "== 9c. /rpc/_manifest plugins listing =="
-MANIFEST=$(curl -sS "$BASE/rpc/_manifest")
+echo "== 9c. /rpc/_manifest plugins listing (auth-gated when the gateway has auth) =="
+MANIFEST=$(curl -sS -H "Authorization: Bearer $ALICE_TOK" "$BASE/rpc/_manifest")
 echo "$MANIFEST" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
@@ -129,8 +129,8 @@ echo -n "  cross_refs entries: "
 curl -sS "$BASE/rpc/_introspect" | grep -oE '"cross_refs":\{[^}]*' | head -c 60 || true
 echo
 
-echo "== 13. Explorer UI mount check =="
-curl -sS "$BASE/rpc/_explorer/" | head -c 80 || true
+echo "== 13. Explorer UI mount check (auth-gated when the gateway has auth) =="
+curl -sS -H "Authorization: Bearer $ALICE_TOK" "$BASE/rpc/_explorer/" | head -c 80 || true
 echo "..."
 echo "  (Open $BASE/rpc/_explorer/ in a browser for the live UI.)"
 

@@ -46,6 +46,12 @@ type Engine struct {
 	// common single-codec (JSON-only) deployment. An atomic so the dispatch
 	// hot path reads it without a lock.
 	negotiable atomic.Bool
+	// needsHeaderGetter is true once any registered method declares a
+	// sov:"header=" param. The gateway checks it to skip per-request header
+	// snapshotting + getter setup in the common deployment where no method
+	// binds a header — zero added alloc for that case. Atomic: read on the
+	// dispatch hot path, set only at boot/registration.
+	needsHeaderGetter atomic.Bool
 	// logger sinks non-fatal boot warnings; nil falls back to slog.Default().
 	logger Logger
 }
@@ -108,6 +114,11 @@ func (e *Engine) RegisterCodec(c Codec) {
 // codec. False in the common JSON-only deployment, letting the transport
 // adapter skip the Content-Type parse on the hot path.
 func (e *Engine) Negotiable() bool { return e.negotiable.Load() }
+
+// NeedsHeaderGetter reports whether any registered method binds a sov:"header="
+// param. The transport skips per-request header snapshotting and stashing the
+// header getter on the context when this is false.
+func (e *Engine) NeedsHeaderGetter() bool { return e.needsHeaderGetter.Load() }
 
 // SetCodec sets the DEFAULT codec (and registers it). Back-compat with the
 // single-codec API — a request that selects no codec uses this one. Passing
@@ -341,6 +352,7 @@ type methodEntry struct {
 	method     reflect.Method
 	router     reflect.Value
 	hasParams  bool
+	streaming  bool         // result is rpc.Stream[T] — dispatch yields NDJSON (W2.7)
 	paramType  reflect.Type // value type (not pointer) of the params struct, if any
 	resultType reflect.Type // value type of the non-error return, if any
 	goName     string       // Go method name, e.g. "Create"
@@ -363,6 +375,10 @@ type methodEntry struct {
 	// Describe and into CheckParams.Perm so the requirement rides next to
 	// the handler instead of a parallel service→requirement map.
 	perm string
+	// deprecated / deprecatedReason come from a `deprecated[=reason]` directive
+	// on the blank `_` sentinel; carried into Describe for introspect/OpenAPI.
+	deprecated       bool
+	deprecatedReason string
 	// invoke, when non-nil, is a typed dispatch closure built at boot by
 	// rpc.Handle. Dispatch calls it directly instead of the reflect path —
 	// no reflect.Value.Call, no reflect.New. Nil for reflectively-
@@ -396,10 +412,12 @@ func (e *Engine) Register(router any) {
 	if typeName == "" {
 		panic("rpc.Engine.Register: router type must be named (no anonymous structs)")
 	}
+	// Wire name = the type name with a trailing "Router" stripped when present
+	// (NoteToolsRouter -> NoteTools); otherwise the type name verbatim
+	// (Notes -> Notes). "Router" is a convention for a clean wire name, no
+	// longer a hard requirement — a struct registers under whatever it is named,
+	// and surfaces discover it by capability (see Engine.Find), not by name.
 	routerName := strings.TrimSuffix(typeName, "Router")
-	if routerName == typeName {
-		panic(fmt.Sprintf("rpc.Engine.Register: router struct %q must end in 'Router'", typeName))
-	}
 
 	methods := map[string]*methodEntry{}
 	for i := 0; i < rt.NumMethod(); i++ {
@@ -417,6 +435,9 @@ func (e *Engine) Register(router any) {
 		entry := buildEntry(typeName, rv, m)
 		if entry == nil {
 			continue
+		}
+		if entry.fieldMap != nil && len(entry.fieldMap.HeaderFields) > 0 {
+			e.needsHeaderGetter.Store(true)
 		}
 		methods[entry.wireName] = entry
 	}
@@ -632,10 +653,15 @@ func buildEntry(typeName string, rv reflect.Value, m reflect.Method) *methodEntr
 		if err != nil {
 			panic(fmt.Sprintf("rpc.Engine.Register: %s.%s params %s: %v", typeName, m.Name, entry.paramType, err))
 		}
+		if err := RejectNestedHeaders(entry.paramType); err != nil {
+			panic(fmt.Sprintf("rpc.Engine.Register: %s.%s params %s: %v", typeName, m.Name, entry.paramType, err))
+		}
 		entry.fieldMap = fm
 		entry.internal = fm.Internal
 		entry.internalHard = fm.InternalHard
 		entry.perm = fm.Perm
+		entry.deprecated = fm.Deprecated
+		entry.deprecatedReason = fm.DeprecatedReason
 	}
 
 	numOut := mt.NumOut()
@@ -649,12 +675,23 @@ func buildEntry(typeName string, rv reflect.Value, m reflect.Method) *methodEntr
 	}
 	if numOut == 2 {
 		entry.resultType = mt.Out(0)
+		// A method returning rpc.Stream[T] server-streams: the gateway drains it
+		// as NDJSON rather than buffering a single JSON result (W2.7). Collapse
+		// resultType to the streamed element T so describe/introspect/OpenAPI/
+		// codegen present the item type, not the Stream wrapper; dispatch keys
+		// off entry.streaming, not resultType.
+		if entry.resultType.Implements(streamProducerType) {
+			entry.streaming = true
+			if elem, ok := streamElem(entry.resultType); ok {
+				entry.resultType = elem
+			}
+		}
 	}
 	return entry
 }
 
 // Lookup returns the method entry for router/method, or false.
-func (e *Engine) Lookup(router, method string) (*methodEntry, bool) {
+func (e *Engine) lookup(router, method string) (*methodEntry, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	methods, ok := e.routers[router]

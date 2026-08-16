@@ -1,5 +1,7 @@
 package rpc
 
+import "slices"
+
 // ParamField describes one JSON field on a method's params object.
 // Used by Explorer / codegen / OpenAPI emission downstream.
 type ParamField struct {
@@ -31,6 +33,29 @@ type ParamField struct {
 	Desc    string `json:"desc,omitempty"`
 	Doc     string `json:"doc,omitempty"`
 	Example string `json:"example,omitempty"`
+
+	// Source names where this field's value comes from: "" (default) is the
+	// request body (codec-decoded); "header" means the request header named by
+	// Header. A header field is NOT part of the body/args schema — it must be
+	// excluded from MCP inputSchema, OpenAPI request bodies, and generated body
+	// types. See docs/HEADER_PARAMS.md.
+	Source string `json:"source,omitempty"`
+	Header string `json:"header,omitempty"`
+}
+
+// HasBodyParams reports whether the method has at least one BODY param field
+// (Source != "header"). Header-bound params are ambient request metadata, not
+// part of the JSON args, so type-shape/codegen consumers gate the request-body
+// argument on this — NOT on HasParams, which counts header fields too (the
+// explorer wants to render them). A method whose ONLY params are header-bound
+// takes no body argument.
+func (md MethodDescriptor) HasBodyParams() bool {
+	for _, p := range md.Params {
+		if p.Source != "header" {
+			return true
+		}
+	}
+	return false
 }
 
 // MethodDescriptor is one exported router method.
@@ -52,6 +77,14 @@ type MethodDescriptor struct {
 	// requires X" without re-reading struct tags. Empty when undeclared.
 	// Discovery only — the AuthzService, not this field, gates access.
 	Perm string `json:"perm,omitempty"`
+	// Deprecated marks the method deprecated (a `deprecated[=reason]` sentinel).
+	// Surfaced to introspect / OpenAPI / codegen. DeprecatedReason is optional.
+	Deprecated       bool   `json:"deprecated,omitempty"`
+	DeprecatedReason string `json:"deprecatedReason,omitempty"`
+	// Streaming marks a server-streaming method (result rpc.Stream[T], W2.7):
+	// it returns an NDJSON stream, not a single JSON result. ResponseTypeScript
+	// describes the per-item type T. Codegen emits an async-iterator consumer.
+	Streaming bool `json:"streaming,omitempty"`
 	// Internal marks a SOFT-hidden method: omitted from the default
 	// introspect report, but present (with this flag set) in the full
 	// payload served under the X-Sov-Introspect-Internal header so the
@@ -75,4 +108,19 @@ type RouterDescriptor struct {
 	Router  string             `json:"router"` // wire name (URL segment)
 	Title   string             `json:"title"`  // group label for explorers
 	Methods []MethodDescriptor `json:"methods"`
+	// Surfaces names the surfaces that expose this router — e.g. "rpc" and/or
+	// "mcp". The engine NEVER sets this (it is surface-agnostic): a surface
+	// builtin stamps its own name via an IntrospectContributor (gateway.TagSurface),
+	// and because the tag lives on the descriptor it FEDERATES — a downstream
+	// aggregator that merges a remote node's catalog carries the remote's surface
+	// tags, so a surface can discover the services it should expose across the
+	// whole mesh, not just the local engine.
+	Surfaces []string `json:"surfaces,omitempty"`
+}
+
+// HasSurface reports whether this router is tagged as exposed on surfaceName
+// (see Surfaces). A surface builtin uses it to pick its routers out of the
+// federated catalog.
+func (rd RouterDescriptor) HasSurface(surfaceName string) bool {
+	return slices.Contains(rd.Surfaces, surfaceName)
 }

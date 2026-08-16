@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
+	"net"
 	"net/http"
 	"reflect"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,15 +23,22 @@ import (
 // Order of operations:
 //  1. Framework endpoints (/rpc/_health, /rpc/_introspect, /rpc/_batch,
 //     /rpc/_register) — dispatched against gateway-owned handlers.
-//  2. Path validation — must be /rpc/{router}/{method}, POST only.
-//  3. Reject service-level _X (refused at gateway by design).
-//  4. Resolve the router and dispatch local or remote.
+//  2. Plugin RouteHandlers, most-specific first (handleInner). Surface builtins
+//     live here: the rpc builtin owns /rpc/{router}/{method} and enforces its
+//     own POST-only + reserved-`_`-name policy before handing off to Dispatch;
+//     mcp owns /mcp. A gateway with no surface registered 404s business paths.
 func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 	// Plugin hook: HeaderParser runs on every inbound request before
 	// any routing decision. A parser may short-circuit by returning an
 	// error; the typical use is stashing values onto req.Header or
 	// req.User without erroring.
 	started := time.Now()
+	// Capture the pre-parser header state so sov:"header=" params bind the same
+	// values the authz gate saw — a HeaderParser must not silently change what a
+	// header-bound param resolves to. Only when a registered method uses header=.
+	if g.engine.NeedsHeaderGetter() {
+		req.headerSnapshot = req.Header.Clone()
+	}
 	var resp *Response
 	if perr := g.callHeaderParsers(req); perr != nil {
 		resp = ErrorResponse(perr)
@@ -41,15 +53,90 @@ func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 	// Plugin hook: DispatchHook fires post-handler with the resolved
 	// router/method/status. Framework endpoints get an empty
 	// router/method so hooks can filter by Path.
-	router, method, _ := rpc.SplitRPCPath(req.Path)
-	subject := ""
-	if s, ok := req.User.(string); ok {
-		subject = s
-	} else if c, ok := req.User.(*Claims); ok && c != nil {
-		subject = c.Subject
+	// Skip the generic per-request event if a surface already recorded a
+	// specific one for this request (RecordDispatch, e.g. MCP tools/call).
+	if !req.recorded {
+		router, method, _ := rpc.SplitRPCPath(req.Path)
+		g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP, requestIDOf(req, resp))
+		req.recorded = true
 	}
-	g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subject, errCodeFromBody(resp.Body), "", resp.Mode)
 	return resp
+}
+
+// deadlineHeader carries the caller's absolute deadline (unix nanoseconds) so a
+// downstream hop can bound its own work to the remaining budget instead of each
+// hop independently waiting out a full timeout. The deadline builtin honors it
+// on ingress; here we only propagate it.
+const deadlineHeader = "X-Sov-Deadline"
+
+// stampDeadline propagates the ctx deadline onto an outbound hop. No-op when the
+// context has no deadline, so it costs nothing unless a deadline is in play.
+func stampDeadline(ctx context.Context, hreq *http.Request) {
+	if dl, ok := ctx.Deadline(); ok {
+		hreq.Header.Set(deadlineHeader, strconv.FormatInt(dl.UnixNano(), 10))
+	}
+}
+
+// remoteIPOf returns req.RemoteIP, nil-safe.
+func remoteIPOf(req *Request) string {
+	if req == nil {
+		return ""
+	}
+	return req.RemoteIP
+}
+
+// requestIDHeader is the canonical correlation-id header (owned on the wire by
+// the requestid builtin). Kept here so the recorder can stamp the id onto
+// DispatchEvent without importing the plugin.
+const requestIDHeader = "X-Sov-Request-Id"
+
+// requestIDOf returns the correlation id for the event — the id the requestid
+// builtin stamped on the response, falling back to an upstream-supplied inbound
+// one, else empty. Nil-safe.
+func requestIDOf(req *Request, resp *Response) string {
+	if resp != nil {
+		if id := resp.Header.Get(requestIDHeader); id != "" {
+			return id
+		}
+	}
+	if req != nil {
+		return req.Header.Get(requestIDHeader)
+	}
+	return ""
+}
+
+// recordDispatchMiddleware is the OUTERMOST middleware. It exists so a request
+// rejected by the auth or authz middleware (401/403) — which short-circuits
+// before handle() runs and thus never reaches handle's own recording — is still
+// emitted as a DispatchEvent, so audit + metrics see auth failures and authz
+// denials, not just calls that made it to a handler. handle sets req.recorded
+// when it records a call that got through, so this fires only for the
+// pre-handler short-circuits it would otherwise miss.
+func (g *Gateway) recordDispatchMiddleware() Middleware {
+	return func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) *Response {
+			started := time.Now()
+			n := g.inFlight.Add(1)
+			defer g.inFlight.Add(-1)
+			var resp *Response
+			if g.maxInFlight > 0 && n > g.maxInFlight {
+				// Load shed: reject immediately (retryable 503) rather than
+				// accept unbounded concurrent work and exhaust goroutines/FDs.
+				resp = ErrorResponse(&rpc.Error{
+					Status: http.StatusServiceUnavailable, Code: "OVERLOADED",
+					Message: "server overloaded; retry later", Retryable: true,
+				})
+			} else {
+				resp = next(ctx, req)
+			}
+			if resp != nil && !req.recorded {
+				router, method, _ := rpc.SplitRPCPath(req.Path)
+				g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP, requestIDOf(req, resp))
+				req.recorded = true
+			}
+			return resp
+		}
+	}
 }
 
 func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
@@ -59,21 +146,129 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 		}
 		return resp
 	}
-	// Plugin-owned routes via RouteHandler. Registered after framework
-	// endpoints so a plugin cannot shadow /rpc/_health, _introspect,
-	// _batch. A handler that returns nil DECLINES the request — routing
-	// falls through to business dispatch. This lets a broad catch-all
-	// mount (e.g. a static SPA plugin at "/") coexist with business RPC
-	// routes by declining the paths it doesn't own (e.g. "/rpc/...").
-	if route, ok := g.matchPluginRoute(req.Path); ok {
-		if resp := route.handler(ctx, req); resp != nil {
+	// Plugin-owned routes via RouteHandler, tried MOST-SPECIFIC first. Framework
+	// endpoints (_health, _introspect, _batch, _register) were already handled
+	// above, so a plugin cannot shadow them. A handler returning nil DECLINES;
+	// routing then falls through to the next-broadest match. This is how the /rpc
+	// surface builtin ("/rpc/") coexists with a more-specific /rpc/_explorer/
+	// plugin and a catch-all "/" SPA. Common case (a single winning match) is a
+	// zero-alloc single scan; the slice is built only on a decline (rare).
+	g.muPlugins.RLock()
+	snap := g.pluginRoutes
+	g.muPlugins.RUnlock()
+	if best := longestPluginRoute(snap, req.Path); best >= 0 {
+		if resp := g.runPluginRoute(snap[best], ctx, req); resp != nil {
+			return resp
+		}
+		for _, r := range pluginRoutesExcept(snap, req.Path, best) {
+			if resp := g.runPluginRoute(r, ctx, req); resp != nil {
+				return resp
+			}
+		}
+	}
+	// No surface claimed it. A gateway with no rpc builtin (gw.Use(rpc.New()))
+	// simply doesn't speak the /rpc surface — the Dispatch fabric still serves
+	// other surfaces (MCP) over the same registered routers.
+	return ErrorResponse(rpc.NotFound("no surface for %q — register a surface plugin (e.g. rpc.New())", req.Path))
+}
+
+// subjectOf returns the authenticated subject the auth middleware stamped onto
+// req (a subject string or *Claims), or "" for an anonymous request.
+func subjectOf(req *Request) string {
+	if req == nil {
+		return ""
+	}
+	switch u := req.User.(type) {
+	case string:
+		return u
+	case *Claims:
+		if u != nil {
+			return u.Subject
+		}
+	}
+	return ""
+}
+
+// PreParserHeader returns the header state captured at gateway ingress — before
+// any HeaderParser plugin mutated req.Header — falling back to req.Header when no
+// snapshot was taken (no registered method uses header= params). A surface that
+// AUTHORIZES or BINDS header= params off an inbound request should use this so
+// its view matches the /rpc surface, which authorizes and binds pre-parser. See
+// docs/HEADER_PARAMS.md.
+func (g *Gateway) PreParserHeader(req *Request) Header {
+	if req == nil {
+		return nil
+	}
+	if req.headerSnapshot != nil {
+		return req.headerSnapshot
+	}
+	return req.Header
+}
+
+// InheritRequestSnapshot copies the pre-parser header snapshot from parent onto
+// a synthetic sub-request, so a surface that builds its own *Request and routes
+// it via Dispatch (bypassing Handle + HeaderParsers) still binds header= params
+// from the pre-parser state — matching the /rpc surface and the documented
+// invariant. Call it on any sub-request built from an inbound one before
+// Dispatch.
+func InheritRequestSnapshot(sub, parent *Request) {
+	if sub != nil && parent != nil {
+		sub.headerSnapshot = parent.headerSnapshot
+	}
+}
+
+// RecordDispatch emits a DispatchHook event (audit, metrics) for a call a
+// surface dispatched OUTSIDE the /rpc HTTP path — an MCP tools/call, say — so
+// observability plugins see per-call router/method/status/subject just as they
+// do for /rpc, instead of only the opaque outer request. Status, error code, and
+// Mode are read from resp; subject from req. No-op when resp is nil.
+func (g *Gateway) RecordDispatch(req *Request, router, method, path string, resp *Response, started time.Time) {
+	if resp == nil {
+		return
+	}
+	if req != nil {
+		// Mark the request so handle skips its generic per-request event — this
+		// specific one replaces it, so the call is counted ONCE (parity with a
+		// direct /rpc call), not twice (outer /mcp + tool).
+		req.recorded = true
+	}
+	g.recordDispatchEventWithMode(router, method, path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, remoteIPOf(req), requestIDOf(req, resp))
+}
+
+// runPluginRoute invokes a plugin route's handler, stamping ModePlugin when the
+// handler left Mode unset. Returns nil when the handler DECLINES.
+//
+// It CONTAINS a panic from the handler — the rpc surface, MCP tools/call, the
+// batch/batchstream fan-out, static, explorer, or any custom surface — so a
+// single bad request or handler bug can't crash the process. Every HTTP surface
+// flows through here (framework endpoints excepted), including the batch/
+// batchstream per-entry goroutines, which run OUTSIDE the transport's own
+// per-connection recover. The panic is routed through the recovery machinery
+// (RecoveryHandler + a logged failure) and converted to a clean 500.
+func (g *Gateway) runPluginRoute(r pluginRoute, ctx context.Context, req *Request) (resp *Response) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			failure := HookFailure{
+				HookName:   "RouteHandler",
+				PluginName: r.owner,
+				Err:        fmt.Errorf("panic: %v", rec),
+				Panic:      rec,
+				Stack:      debug.Stack(),
+			}
+			resp = g.dispatchRecovery(failure)
+			if resp == nil {
+				resp = ErrorResponse(rpc.Internal("internal server error"))
+			}
 			if resp.Mode == "" {
 				resp.Mode = ModePlugin
 			}
-			return resp
 		}
+	}()
+	resp = r.handler(ctx, req)
+	if resp != nil && resp.Mode == "" {
+		resp.Mode = ModePlugin
 	}
-	return g.routeBusiness(ctx, req)
+	return resp
 }
 
 // errCodeFromBody peeks at a response body looking for {"error":{"code":...}}.
@@ -95,8 +290,12 @@ func errCodeFromBody(body []byte) string {
 }
 
 // codecNameFromContentType maps an inbound Content-Type to a codec registry
-// name (HELL-286). "application/json" (or empty) yields "" — the caller then
-// leaves the engine default (JSON). Other "application/[x-]<sub>" types yield
+// name (HELL-286). Empty Content-Type yields "" — the caller leaves the engine
+// default. "application/json" yields "json" EXPLICITLY (not "") so a request
+// declaring JSON always resolves to the registered json codec, never to a
+// swapped-in SetCodec default — this is what keeps framework sub-dispatches
+// (auth verify/check, batch, MCP tools/call), which all send Content-Type:
+// application/json, pinned to JSON. Other "application/[x-]<sub>" types yield
 // "<sub>" (e.g. application/x-msgpack -> "msgpack"); an unregistered name
 // falls back to the default at ResolveCodec time. Parameters (";charset=…")
 // are ignored.
@@ -112,47 +311,56 @@ func codecNameFromContentType(ct string) string {
 	if !strings.HasPrefix(ct, prefix) {
 		return ""
 	}
-	sub := strings.TrimPrefix(ct[len(prefix):], "x-")
-	if sub == "json" {
-		return "" // the default; no per-request selection needed
-	}
-	return sub
+	// "application/json" -> "json" (an explicit registry name), so JSON is
+	// resolved from the codec registry, not the ambient default a consumer may
+	// have swapped via SetCodec. Framework sub-dispatches rely on this.
+	return strings.TrimPrefix(ct[len(prefix):], "x-")
 }
 
-// routeBusiness handles non-framework /rpc/{router}/{method} dispatch.
-// Exported-ish (lowercase but used from framework.go) so _batch can fan
-// out through the same path.
-func (g *Gateway) routeBusiness(ctx context.Context, req *Request) *Response {
-	if req.Method != "" && req.Method != http.MethodPost {
-		return ErrorResponse(&rpc.Error{Status: 405, Code: "BAD_REQUEST", Message: "method not allowed"})
-	}
+// Dispatch is the mesh fabric. It resolves req's service and routes the call to
+// wherever that service lives — the local engine, an in-process peer gateway,
+// or a remote pod over HTTP — and returns the response. It is protocol-agnostic:
+// ANY surface (the /rpc adapter, MCP tools, batch) builds a Request whose Path
+// is /rpc/{service}/{method} and calls Dispatch; the surface never knows or
+// cares whether the service is local or across the mesh. That single seam is
+// what lets any surface mesh with no surface-specific routing code — a tool
+// whose service is federated to another node just resolves remote here.
+//
+// Dispatch does NOT run the auth/authz middleware: a caller that reaches it
+// OUTSIDE the HTTP chain (an MCP tool call, an internal fan-out) owns identity
+// (set req.User) and authorization (call Authorize first). The /rpc HTTP path
+// still runs the full middleware chain before landing here via the rpc surface.
+func (g *Gateway) Dispatch(ctx context.Context, req *Request) *Response {
 	router, method, ok := rpc.SplitRPCPath(req.Path)
 	if !ok {
 		return ErrorResponse(rpc.NotFound("path must be /rpc/{router}/{method}"))
 	}
-	if strings.HasPrefix(router, "_") {
-		return ErrorResponse(rpc.NotFound("router %q reserved", router))
-	}
-	if strings.HasPrefix(method, "_") {
-		return ErrorResponse(rpc.NotFound("method %q is internal-network only", method))
-	}
+	return g.DispatchResolved(ctx, req, router, method)
+}
 
+// DispatchResolved is Dispatch for a caller that has ALREADY parsed req.Path into
+// router + method — the rpc surface, for one, parses to apply its POST/reserved
+// policy, so it hands the parts straight here instead of re-splitting.
+//
+// INVARIANT: router and method MUST equal SplitRPCPath(req.Path). Dispatch
+// resolves and dispatches by the router/method ARGUMENTS, but dispatchLocal
+// stashes req.Path verbatim as ContextKeyPath — pass mismatched values and a
+// handler (or an audit/tenant plugin) reading ctx path sees a lie. Callers that
+// haven't parsed the path should use Dispatch. See Dispatch for routing.
+func (g *Gateway) DispatchResolved(ctx context.Context, req *Request, router, method string) *Response {
 	endpoint, ok := g.resolver.Resolve(ctx, router)
 	if !ok {
 		return ErrorResponse(rpc.NotFound("service %q not registered", router))
 	}
 	if endpoint.Peer != nil {
-		// Nested PEMM: another gateway in the same binary handles
-		// this call in-process. Mode label distinguishes peer hops
-		// from local engine calls.
+		// Nested PEMM: another gateway in the same binary handles this call
+		// in-process. Mode label distinguishes peer hops from local engine
+		// calls — the peer labels its own response "local", but from THIS
+		// gateway's observability perspective the call crossed a peer hop.
 		resp := endpoint.Peer(ctx, req)
 		if resp == nil {
 			return ErrorResponse(rpc.Internal("peer returned nil response"))
 		}
-		// Always overwrite Mode — the peer's own dispatch labels its
-		// own response (typically "local"), but from THIS gateway's
-		// observability perspective the call crossed a peer hop. The
-		// peer gateway's audit (if installed) still saw it as local.
 		resp.Mode = ModePeer
 		return resp
 	}
@@ -165,12 +373,14 @@ func (g *Gateway) routeBusiness(ctx context.Context, req *Request) *Response {
 func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req *Request) *Response {
 	rc := rpc.NewContext(ctx)
 	// Codec negotiation (HELL-286): map the inbound Content-Type to a
-	// registered business codec. Absent/unknown/json all resolve to the
-	// JSON default, so internal sub-dispatches (auth verify, authz check,
-	// batch entries) — which carry no codec Content-Type — stay JSON.
-	// Only negotiate when more than one codec is registered — the common
-	// JSON-only deployment skips the Content-Type parse entirely and Dispatch
-	// falls back to the default codec.
+	// registered business codec. An absent Content-Type resolves to the
+	// engine default; an explicit "application/json" resolves to the
+	// registered json codec (NOT a SetCodec-swapped default), so internal
+	// sub-dispatches (auth verify/check, batch, MCP tools/call) — which all
+	// send Content-Type: application/json — stay JSON even when a consumer
+	// SetCodec'd a non-JSON default. Only negotiate when more than one codec
+	// is registered — the common JSON-only deployment skips the Content-Type
+	// parse entirely and Dispatch falls back to the default codec.
 	var selected rpc.Codec
 	if g.engine.Negotiable() {
 		if name := codecNameFromContentType(req.Header.Get("Content-Type")); name != "" {
@@ -191,6 +401,18 @@ func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req 
 	}
 	rc.Set(ContextKeyRemoteIP, req.RemoteIP)
 	rc.Set(ContextKeyPath, req.Path)
+	// Expose the pre-parser header snapshot to the engine's header= param
+	// binding (rpc.CtxHeaderGetter), so a bound param matches what the authz
+	// gate saw. Gated so the common all-body deployment pays no alloc; falls
+	// back to live req.Header for any dispatch that didn't pass through handle
+	// (e.g. an internal sub-dispatch).
+	if g.engine.NeedsHeaderGetter() {
+		src := req.headerSnapshot
+		if src == nil {
+			src = req.Header
+		}
+		rc.Set(rpc.CtxHeaderGetter, rpc.HeaderGetter(src.Get))
+	}
 	// Stash the inbound Authorization header so handlers can forward it
 	// on cross-service calls (e.g. mesh-mode FeedRouter calling back
 	// through the central gateway). The gateway has already validated
@@ -203,6 +425,21 @@ func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req 
 	// outbound HTTP headers (request-id, trace-id, tenant). Symmetric
 	// to HeaderInjector for the local path.
 	g.callContextContributors(rc, req)
+	// Server-streaming method (W2.7): drain rpc.Stream[T] as NDJSON through
+	// Response.Stream instead of buffering one JSON result. A pre-stream failure
+	// (bad params, authz denial, handler error) comes back buffered.
+	if g.engine.IsStreaming(router, method) {
+		producer, st, b := g.engine.DispatchStream(rc, router, method, req.Body)
+		if producer == nil {
+			return &Response{Status: st, Body: b, Mode: ModeLocal}
+		}
+		return &Response{
+			Status: 200,
+			Header: Header{"Content-Type": ndjsonContentType},
+			Stream: ndjsonStream(producer),
+			Mode:   ModeLocal,
+		}
+	}
 	status, body := g.engine.Dispatch(rc, router, method, req.Body)
 	resp := &Response{Status: status, Body: body, Mode: ModeLocal}
 	// Reflect the negotiated codec on the response so the caller decodes the
@@ -223,11 +460,99 @@ func (g *Gateway) CodecFor(req *Request) rpc.Codec {
 	return g.engine.ResolveCodec(codecNameFromContentType(req.Header.Get("Content-Type")))
 }
 
+// remoteOutcome classifies a single remote attempt for the retry policy (W1.4).
+type remoteOutcome int
+
+const (
+	remoteOK            remoteOutcome = iota // got an HTTP response (any status)
+	remoteNeverExecuted                      // provably never reached the app: breaker open, or a dial-phase failure
+	remoteAmbiguous                          // the request may have been sent (timeout, mid-flight reset)
+)
+
+// dispatchRemote proxies to a remote replica, retrying on failure when
+// configured (W1.4, off by default). The loop re-resolves between attempts so
+// each retry lands on a DIFFERENT replica (round-robin; the picker skips open
+// breakers). A never-executed failure (breaker open / dial refused) is always
+// safe to retry; an ambiguous failure (timeout) or an upstream 5xx retries ONLY
+// when the caller asserted idempotency via an Idempotency-Key, so a
+// maybe-executed non-idempotent op is never silently re-sent.
 func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method string, req *Request) *Response {
+	attempts := g.retry.MaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	idempotent := req.Header.Get("Idempotency-Key") != ""
+	var resp *Response
+	for attempt := 1; ; attempt++ {
+		var outcome remoteOutcome
+		resp, outcome = g.dispatchRemoteOnce(ctx, base, router, method, req)
+		if attempt >= attempts || !retryableOutcome(outcome, resp, idempotent) {
+			return resp
+		}
+		if !g.backoffOrDone(ctx, attempt) {
+			return resp // deadline hit mid-backoff — return what we have
+		}
+		// Re-pick a replica for the next attempt; bail if none remains remote.
+		ep, ok := g.resolver.Resolve(ctx, router)
+		if !ok || ep.Local || ep.Peer != nil || ep.RemoteAddr == "" {
+			return resp
+		}
+		base = ep.RemoteAddr
+	}
+}
+
+// retryableOutcome decides whether a failed attempt should be retried.
+func retryableOutcome(o remoteOutcome, resp *Response, idempotent bool) bool {
+	switch o {
+	case remoteNeverExecuted:
+		return true // request never ran — always safe to try another replica
+	case remoteAmbiguous:
+		return idempotent
+	case remoteOK:
+		if resp != nil && (resp.Status == http.StatusBadGateway ||
+			resp.Status == http.StatusServiceUnavailable ||
+			resp.Status == http.StatusGatewayTimeout) {
+			return idempotent
+		}
+	}
+	return false
+}
+
+// backoffOrDone sleeps an exponential-with-full-jitter backoff before the next
+// attempt, capped by MaxBackoff and never exceeding the ctx deadline. Returns
+// false if the context is done (stop retrying).
+func (g *Gateway) backoffOrDone(ctx context.Context, attempt int) bool {
+	d := g.retry.BaseBackoff << (attempt - 1) // attempt >= 1
+	if d <= 0 || d > g.retry.MaxBackoff {
+		d = g.retry.MaxBackoff
+	}
+	wait := time.Duration(rand.Int64N(int64(d) + 1)) // full jitter in [0, d]
+	if dl, ok := ctx.Deadline(); ok {
+		remaining := time.Until(dl)
+		if remaining <= 0 {
+			return false
+		}
+		if wait > remaining {
+			wait = remaining
+		}
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// dispatchRemoteOnce performs a SINGLE proxy attempt and classifies the outcome
+// for the retry policy.
+func (g *Gateway) dispatchRemoteOnce(ctx context.Context, base, router, method string, req *Request) (*Response, remoteOutcome) {
 	url := strings.TrimRight(base, "/") + req.Path
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Body))
 	if err != nil {
-		return ErrorResponse(rpc.Internal("proxy build request: %v", err))
+		return ErrorResponse(rpc.Internal("proxy build request: %v", err)), remoteOK
 	}
 	// Forward inbound headers (already X-Sov-* stripped by Server).
 	for k, v := range req.Header {
@@ -243,16 +568,33 @@ func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method strin
 	// X-Sov-Upstream is no longer framework-stamped; the Advertise
 	// plugin owns that header now.
 	g.callHeaderInjectors(ctx, req, hreq)
+	stampDeadline(ctx, hreq)
 
+	// Circuit breaker: after repeated transport failures to this upstream,
+	// fail fast instead of making every call wait out the full proxy timeout.
+	if !g.breakers.allow(base) {
+		return ErrorResponse(&rpc.Error{
+			Status: http.StatusServiceUnavailable, Code: "UPSTREAM_CIRCUIT_OPEN",
+			Message: fmt.Sprintf("upstream %s circuit open (failing fast after repeated errors)", base),
+		}), remoteNeverExecuted
+	}
 	resp, err := g.proxy.Do(hreq)
 	if err != nil {
+		g.breakers.record(base, false)
+		outcome := remoteAmbiguous
+		if neverSent(err) {
+			outcome = remoteNeverExecuted
+		}
 		return ErrorResponse(&rpc.Error{
 			Status: http.StatusBadGateway, Code: "UPSTREAM_UNAVAILABLE",
 			Message: fmt.Sprintf("proxy %s/%s: %v", router, method, err),
-		})
+		}), outcome
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	// A 5xx from the upstream is an unhealthy signal too (panicking handler,
+	// dependency down, overload) — count it as a breaker failure so an
+	// up-but-broken pod trips the circuit, not just an unreachable one. 4xx is
+	// the caller's fault, not the upstream's health, so it counts as success.
+	g.breakers.record(base, resp.StatusCode < 500)
 
 	hdr := Header{}
 	for k, v := range resp.Header {
@@ -262,7 +604,31 @@ func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method strin
 	if resp.Header.Get(IntrospectVisitedHeader) != "" {
 		mode = ModeFederated
 	}
-	return &Response{Status: resp.StatusCode, Header: hdr, Body: body, Mode: mode}
+	// Stream-through: when the upstream emits NDJSON, hand its body straight to
+	// Response.Stream instead of buffering, so a streaming method stays streaming
+	// across the whole mesh chain (W2.7). The adapter closes the body when the
+	// response is done, so we must NOT close it here. This is a clean 200 (a
+	// retryable outcome would already have returned above), so the stream is
+	// never fed into a retry.
+	if isNDJSON(hdr.Get("Content-Type")) {
+		return &Response{Status: resp.StatusCode, Header: hdr, Stream: resp.Body, Mode: mode}, remoteOK
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return &Response{Status: resp.StatusCode, Header: hdr, Body: body, Mode: mode}, remoteOK
+}
+
+// neverSent reports whether err means the request provably never left this
+// process — a dial-phase failure (connection refused, no route). Such a request
+// definitely did not execute, so retrying another replica is always safe. A
+// post-dial error (timeout, reset mid-flight) is NOT classified here: it is
+// ambiguous and retried only under an idempotency assertion.
+func neverSent(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op == "dial"
+	}
+	return false
 }
 
 // BuildProxyRequest constructs an outbound HTTP request to addr+path
@@ -286,6 +652,7 @@ func (g *Gateway) BuildProxyRequest(ctx context.Context, method, addr, path stri
 			hreq.Header.Set("X-Forwarded-For", parent.RemoteIP)
 		}
 		g.callHeaderInjectors(ctx, parent, hreq)
+		stampDeadline(ctx, hreq)
 	}
 	if g.advertiseURL != "" {
 		hreq.Header.Set("X-Sov-Upstream", g.advertiseURL)

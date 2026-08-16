@@ -21,12 +21,20 @@ import (
 // trailing slash added automatically to the subtree match).
 type Config struct {
 	PathPrefix string
+	// Public serves the explorer to ANONYMOUS callers even when the gateway
+	// has auth configured. Default false: a gateway with an auth binding
+	// requires a valid subject to reach the explorer (it discloses the full
+	// internal catalog, including soft-hidden methods). A gateway with no auth
+	// (local/dev) is always open. Set true to intentionally expose the UI
+	// publicly on an authed gateway.
+	Public bool
 }
 
 // Plugin is the explorer-UI route owner returned by New.
 type Plugin struct {
 	gw     *gateway.Gateway
 	prefix string
+	public bool
 }
 
 // Compile-time proof of the hooks this plugin binds — a signature
@@ -39,12 +47,34 @@ var (
 )
 
 // New returns an explorer plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("explorer.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	prefix := cfg.PathPrefix
 	if prefix == "" {
 		prefix = "/rpc/_explorer"
 	}
-	return &Plugin{prefix: prefix}
+	return &Plugin{prefix: prefix, public: cfg.Public}
+}
+
+// gateAnon returns a 401 for an anonymous caller when the gateway has auth
+// configured and Public was not set — so a disclosure endpoint isn't wide open
+// on a production gateway. Returns nil (serve) for a Public plugin or a gateway
+// with no auth binding (local/dev), or when the caller is authenticated.
+func (p *Plugin) gateAnon(req *gateway.Request) *gateway.Response {
+	if p.public || p.gw == nil || p.gw.AuthBinding() == nil || req.User != nil {
+		return nil
+	}
+	return &gateway.Response{
+		Status: http.StatusUnauthorized,
+		Header: gateway.Header{"Content-Type": "application/json"},
+		Body:   []byte(`{"error":{"code":"UNAUTHORIZED","message":"authentication required for the explorer (set explorer Public:true to allow anonymous access)"}}`),
+	}
 }
 
 // PluginName surfaces in /rpc/_introspect.plugins[].
@@ -71,6 +101,9 @@ func (p *Plugin) RoutePatterns() []string {
 // endpoint is opt-in-disabled (it discloses the same surface the explorer
 // renders, so coupling them would force the endpoint open).
 func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.Response {
+	if resp := p.gateAnon(req); resp != nil {
+		return resp
+	}
 	// The "show internal" toggle fetches a distinct path; translate it to
 	// the introspect header so the gateway returns the full payload
 	// (soft-hidden methods included). Request.Path carries no query string,

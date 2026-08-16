@@ -14,6 +14,7 @@ gateway, or as a hybrid that does both at once.
 This README is the read-me-first. Going deeper:
 
 - [DESIGN.md](DESIGN.md) — the model: wire shape, plugin hooks, federation, auth-split.
+- [docs/SURFACES.md](docs/SURFACES.md) — surfaces over the mesh fabric: how `/rpc` and MCP both ride `Dispatch`, the registry filter engine, and how a surface (MCP) meshes across nodes. Serve the same struct over RPC + MCP.
 - [docs/PEMM.md](docs/PEMM.md) — what "Protocol-Enforced Modular Monolith" means and why it's distinct (enforcement axis, fused boundary).
 - [docs/WIRE_CONTRACT.md](docs/WIRE_CONTRACT.md) — the exact, language-agnostic contract a pod implements (register, signing, seal, RPC, introspect, health).
 - [examples/chirp/polyglot/](examples/chirp/polyglot/) — a non-Go (Python) pod that joins the mesh as a first-class member. Producer polyglot, proven.
@@ -39,9 +40,11 @@ import (
     "log"
 
     "github.com/Toyz/sov"
+    "github.com/Toyz/sov/gateway/builtin/rpc"
 )
 
-type EchoRouter struct{}
+// Embed rpc.Served — the marker that exposes a router over the /rpc surface.
+type EchoRouter struct{ rpc.Served }
 type SayParams struct{ Msg string `json:"msg"` }
 
 func (r *EchoRouter) Say(_ *sov.Context, p *SayParams) (map[string]string, error) {
@@ -53,6 +56,7 @@ func (r *EchoRouter) Say(_ *sov.Context, p *SayParams) (map[string]string, error
 
 func main() {
     gw := sov.New()
+    gw.MustUse(rpc.New()) // the /rpc surface is a builtin — register it like any other
     gw.Register(&EchoRouter{})
     log.Fatal(gw.ListenAndServe(context.Background(), ":8080"))
 }
@@ -67,7 +71,9 @@ curl -s -X POST localhost:8080/rpc/Echo/say -d '{"args":["hi"]}'
 ```
 
 Dispatch picks the shape by the first non-whitespace byte of `args`:
-`[` → positional, `{` → named. A `sov:` struct tag drives both paths.
+`[` → positional, `{` → named. A `sov:` struct tag drives both paths — see
+[docs/SOV_TAGS.md](docs/SOV_TAGS.md) for the full tag syntax (positional slots,
+metadata, commas/quotes in values, `header=`).
 
 ## Handler contract
 
@@ -118,9 +124,9 @@ byte-equivalent output against all of them — that's the PEMM proof.
 
 ```go
 gw := sov.New(
-    sov.WithAdvertiseURL("http://this-pod:8080"), // stamp X-Sov-Upstream
-    sov.WithHMACSecret(secret),                   // seal X-Sov-* bundle
+    sov.WithAdvertiseURL("http://this-pod:8080"), // stamp X-Sov-Upstream on outbound hops
 )
+gw.MustUse(rpc.New())                             // the /rpc surface (a builtin)
 
 // Local in-process — engine.Register sugar.
 gw.Register(&UserRouter{...})

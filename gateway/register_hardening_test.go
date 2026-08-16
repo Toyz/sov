@@ -11,6 +11,7 @@ import (
 	. "github.com/Toyz/sov/gateway"
 	meshsecretproto "github.com/Toyz/sov/gateway/builtin/meshsecret/proto"
 	"github.com/Toyz/sov/gateway/builtin/registry"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -38,7 +39,7 @@ func (p testMeshSecretPlugin) ParseHeaders(req *Request) *rpc.Error {
 // use this in place of the dropped WithMeshSecret Option.
 func useMeshSecret(t *testing.T, secret []byte, opts ...Option) *Gateway {
 	t.Helper()
-	gw := New(opts...)
+	gw := gwtest.New(opts...)
 	if err := gw.Use(registry.New(registry.Config{})); err != nil {
 		t.Fatalf("Use registry: %v", err)
 	}

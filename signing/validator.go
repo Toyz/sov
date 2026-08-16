@@ -14,14 +14,14 @@ import (
 type Reason string
 
 const (
-	ReasonMissingHeaders Reason = "MISSING_HEADERS"
-	ReasonBadTimestamp   Reason = "BAD_TIMESTAMP"
-	ReasonExpired        Reason = "TIMESTAMP_EXPIRED"
+	ReasonMissingHeaders  Reason = "MISSING_HEADERS"
+	ReasonBadTimestamp    Reason = "BAD_TIMESTAMP"
+	ReasonExpired         Reason = "TIMESTAMP_EXPIRED"
 	ReasonBadSignatureFmt Reason = "BAD_SIGNATURE_FORMAT"
-	ReasonSessionMissing Reason = "SESSION_EXPIRED"
-	ReasonSessionLookup  Reason = "SESSION_LOOKUP_FAILED"
-	ReasonBadPublicKey   Reason = "BAD_PUBLIC_KEY"
-	ReasonInvalidSig     Reason = "INVALID_SIGNATURE"
+	ReasonSessionMissing  Reason = "SESSION_EXPIRED"
+	ReasonSessionLookup   Reason = "SESSION_LOOKUP_FAILED"
+	ReasonBadPublicKey    Reason = "BAD_PUBLIC_KEY"
+	ReasonInvalidSig      Reason = "INVALID_SIGNATURE"
 )
 
 // Failure is the error type the Validator returns on any rejection.
@@ -56,8 +56,14 @@ type Validator struct {
 	now          func() time.Time
 }
 
-// New returns a Validator. Store is mandatory.
+// New returns a Validator. Store is mandatory — New panics if it is nil,
+// because a Validator with no key store can never resolve a session's public
+// key and would reject (or nil-deref on) every request. Failing at
+// construction turns a latent runtime fault into a loud boot-time one.
 func New(opts Options) *Validator {
+	if opts.Store == nil {
+		panic("signing.New: Store is required")
+	}
 	if opts.ReplayWindow <= 0 {
 		opts.ReplayWindow = 30 * time.Second
 	}

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 )
 
@@ -13,9 +14,12 @@ import (
 // your own for anything else, so the framework keeps zero external deps.
 //
 // SCOPE: the codec governs BUSINESS method params/results at the engine
-// dispatch seam. Framework envelopes (_batch, _introspect, and the authz
-// Check / auth verify sub-dispatches) are JSON by construction and are not
-// re-encoded through a custom codec. See HELL-286.
+// dispatch seam. Framework envelopes (_batch, _introspect, batch/MCP entry
+// dispatches, and the authz Check / auth verify sub-dispatches) are pinned to
+// JSON: they all carry Content-Type: application/json, which the gateway
+// resolves to the registered json codec — never to a SetCodec-swapped default.
+// A custom default codec therefore never re-encodes framework envelopes. See
+// HELL-286.
 type Codec interface {
 	// Name is the codec's wire identity (e.g. "json"), used for
 	// Content-Type negotiation.
@@ -46,9 +50,18 @@ const jsonName = "json"
 
 func (jsonCodec) Name() string { return jsonName }
 
+// maxJSONDepth bounds inbound object/array nesting. Real params nest far
+// shallower; the cap rejects a decode-amplification payload (deeply nested
+// arrays/objects that slip under MaxBodyBytes but force worst-case decoder
+// allocation) before json.Unmarshal runs.
+const maxJSONDepth = 64
+
 func (jsonCodec) DecodeParams(body []byte, params any, fm *FieldMap) error {
 	if len(body) == 0 {
 		return nil
+	}
+	if !jsonDepthOK(body, maxJSONDepth) {
+		return BadRequest("request body nests too deeply (max %d)", maxJSONDepth)
 	}
 	var req Request
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -56,13 +69,86 @@ func (jsonCodec) DecodeParams(body []byte, params any, fm *FieldMap) error {
 	}
 	// bindParams returns a typed *Error; guard the nil case so we never
 	// hand back a non-nil error interface wrapping a nil *Error.
-	if perr := bindParams(reflect.ValueOf(params).Elem(), fm, req.Args); perr != nil {
+	dst := reflect.ValueOf(params).Elem()
+	if perr := bindParams(dst, fm, req.Args); perr != nil {
+		return perr
+	}
+	if perr := validateConstraints(dst, fm); perr != nil {
 		return perr
 	}
 	return nil
 }
 
+// validateConstraints enforces declared field constraints (currently maxlen)
+// on the bound params. A no-op unless a field opted in, so it costs existing
+// routers nothing. Violations are collected into a single 400 carrying
+// field-level Details.
+func validateConstraints(v reflect.Value, fm *FieldMap) *Error {
+	var details []FieldError
+	for i := range fm.Fields {
+		f := &fm.Fields[i]
+		if f.MaxLen <= 0 {
+			continue
+		}
+		fv := v.Field(f.StructIdx)
+		for fv.Kind() == reflect.Ptr {
+			if fv.IsNil() {
+				break
+			}
+			fv = fv.Elem()
+		}
+		switch fv.Kind() {
+		case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
+			if fv.Len() > f.MaxLen {
+				details = append(details, FieldError{
+					Field:   f.WireName,
+					Code:    "TOO_LONG",
+					Message: fmt.Sprintf("exceeds max length %d", f.MaxLen),
+				})
+			}
+		}
+	}
+	if len(details) > 0 {
+		return BadRequest("request failed validation").WithDetails(details...)
+	}
+	return nil
+}
+
 func (jsonCodec) EncodeResult(data any) ([]byte, error) { return MarshalSuccess(data), nil }
+
+// jsonDepthOK reports whether the JSON in b nests no deeper than max object/array
+// levels. String-aware: brackets inside string literals don't count, and escaped
+// quotes are handled. A cheap O(n) scan with no allocation.
+func jsonDepthOK(b []byte, max int) bool {
+	depth := 0
+	inStr := false
+	esc := false
+	for _, c := range b {
+		if inStr {
+			switch {
+			case esc:
+				esc = false
+			case c == '\\':
+				esc = true
+			case c == '"':
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{', '[':
+			depth++
+			if depth > max {
+				return false
+			}
+		case '}', ']':
+			depth--
+		}
+	}
+	return true
+}
 
 func (jsonCodec) EncodeError(e *Error) ([]byte, error) { return MarshalError(e), nil }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	hmacsealproto "github.com/Toyz/sov/gateway/builtin/hmacseal/proto"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -45,7 +46,7 @@ func (r *WhoRouter) Me(ctx *rpc.Context) (string, error) {
 // ---- Tests ----------------------------------------------------------------
 
 func TestAuth_BearerToClaimsLocal(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 
@@ -63,7 +64,7 @@ func TestAuth_BearerToClaimsLocal(t *testing.T) {
 }
 
 func TestAuth_BadBearerRejected(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 
@@ -78,7 +79,7 @@ func TestAuth_BadBearerRejected(t *testing.T) {
 }
 
 func TestAuth_AnonymousRejectedByHandler(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.Register(&WhoRouter{})
 
@@ -93,7 +94,7 @@ func TestAuth_AnonymousRejectedByHandler(t *testing.T) {
 }
 
 func TestAuth_CachedAcrossCalls(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	calls := 0
 	gw.RegisterAuth(&CountingAuthRouter{baseline: &AuthRouter{}, calls: &calls})
 	gw.Register(&WhoRouter{})
@@ -151,7 +152,7 @@ func TestSeal_InjectAndVerify(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	gw := New()
+	gw := gwtest.New()
 	if err := gw.Use(sealerPlugin{secret: secret}); err != nil {
 		t.Fatalf("Use sealer: %v", err)
 	}
@@ -211,7 +212,7 @@ func (r *AuthzRouter) Check(ctx *rpc.Context, p *CheckParams) (*AuthzDecision, e
 }
 
 func TestAuthz_AllowAndDeny(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.RegisterAuthz(&AuthzRouter{denyMethod: "deleteAll"})
 	gw.Register(&WhoRouter{})
@@ -237,7 +238,7 @@ func TestAuthz_AllowAndDeny(t *testing.T) {
 // turns into 401 UNAUTHORIZED (not 403 FORBIDDEN) — the authz service
 // owns the "this method requires auth" decision, not the gateway.
 func TestAuthz_AnonymousAuthenticateDecision(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	gw.RegisterAuthz(&AuthzRouter{denyAnonNon: true})
 	gw.Register(&WhoRouter{})
@@ -257,7 +258,7 @@ func TestAuthz_AnonymousAuthenticateDecision(t *testing.T) {
 // Anonymous requests must be sent to the authz service when bound — the
 // pre-fix middleware skipped on nil claims, masking misconfiguration.
 func TestAuthz_AnonymousIsEvaluated(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuthz(&AuthzRouter{denyAnonNon: true})
 	gw.Register(&WhoRouter{})
 
@@ -294,7 +295,7 @@ func (r *PermGuardedRouter) AuthzRequirements() map[string]string {
 // caller's inbound headers (HELL-278), so per-tenant RBAC can be enforced
 // in one seam with no side map.
 func TestAuthz_CheckReceivesPermAndHeaders(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	rec := &recordingAuthzRouter{}
 	gw.RegisterAuthz(rec)
@@ -340,7 +341,7 @@ func (whoRoutePlugin) ServeRoute(_ context.Context, req *Request) *Response {
 // from a valid bearer (200) and stay nil for anonymous (401), without
 // parsing the bearer itself.
 func TestAuth_FrameworkRouteGetsResolvedUser(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&AuthRouter{})
 	if err := gw.Use(whoRoutePlugin{}); err != nil {
 		t.Fatalf("Use who-route: %v", err)

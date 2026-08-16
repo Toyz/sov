@@ -3,7 +3,7 @@
 //
 //   - Inline: `{ field?: string; other: number[] }` — one-liner, what
 //     the Explorer UI renders next to each method (and what
-//     rpc.TSPreviewForMethod consumed for years before this split).
+//     tsPreviewForMethod consumed for years before this split).
 //   - Decl:   `export interface Name {\n  field?: string;\n}` — full
 //     `.d.ts` form, what the sovgen CLI emits per named type.
 //   - Collect: walk a root type, emit one TypeDecl per named struct
@@ -120,12 +120,30 @@ type fieldInfo struct {
 	Optional bool
 }
 
+// sovTagHasHeader reports whether a sov struct tag binds the field from a
+// request header (sov:"header=..."). Such a field is not part of the JSON type
+// shape, so tsrender omits it. See docs/HEADER_PARAMS.md.
+func sovTagHasHeader(sov string) bool {
+	if sov == "" {
+		return false
+	}
+	for _, tok := range strings.Split(sov, ",") {
+		if strings.HasPrefix(strings.TrimSpace(tok), "header=") {
+			return true
+		}
+	}
+	return false
+}
+
 func structFields(t reflect.Type) []fieldInfo {
 	out := make([]fieldInfo, 0, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		sf := t.Field(i)
 		if !sf.IsExported() {
 			continue
+		}
+		if sovTagHasHeader(sf.Tag.Get("sov")) {
+			continue // header-bound: not part of the JSON type shape
 		}
 		tag := sf.Tag.Get("json")
 		if tag == "-" {

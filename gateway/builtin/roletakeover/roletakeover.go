@@ -22,7 +22,17 @@ type Config struct{}
 type Plugin struct{}
 
 // New returns the role-takeover plugin from cfg.
-func New(cfg Config) *Plugin { _ = cfg; return &Plugin{} }
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("roletakeover.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
+	_ = cfg
+	return &Plugin{}
+}
 
 // Compile-time proof of the hooks this plugin binds — a signature
 // drift here is a build error, not a silent non-binding at runtime.

@@ -13,6 +13,7 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/Toyz/sov/rpc"
@@ -27,6 +28,9 @@ type pluginRoute struct {
 	subtree bool
 	handler func(ctx context.Context, req *Request) *Response
 	owner   string
+	// priority overrides specificity-based ordering (RoutePrioritizer). Higher
+	// wins over a longer pattern; default 0. See RouteHandler / RoutePrioritizer.
+	priority int
 }
 
 // snapshotPlugins returns a clone of g.plugins taken under the read
@@ -40,24 +44,61 @@ func (g *Gateway) snapshotPlugins() []*pluginEntry {
 	return append([]*pluginEntry(nil), g.plugins...)
 }
 
-// matchPluginRoute returns the first registered plugin route whose
-// pattern matches req.Path. Match order is registration order.
-func (g *Gateway) matchPluginRoute(path string) (pluginRoute, bool) {
-	g.muPlugins.RLock()
-	snap := g.pluginRoutes
-	g.muPlugins.RUnlock()
-	for _, r := range snap {
-		if r.subtree {
-			if len(path) >= len(r.pattern) && path[:len(r.pattern)] == r.pattern {
-				return r, true
-			}
-			continue
-		}
-		if path == r.pattern {
-			return r, true
+// matches reports whether this route's pattern matches path (subtree = prefix,
+// else exact).
+func (r pluginRoute) matches(path string) bool {
+	if r.subtree {
+		return len(path) >= len(r.pattern) && path[:len(r.pattern)] == r.pattern
+	}
+	return path == r.pattern
+}
+
+// longestPluginRoute returns the index into snap of the MOST-SPECIFIC route
+// matching path, or -1. A single zero-alloc scan — this is the hot path, hit
+// once per request. Order is by explicit priority first (RoutePrioritizer), then
+// pattern length, so a broad surface like the /rpc builtin ("/rpc/") never
+// shadows a more-specific route ("/rpc/_explorer/") or a catch-all SPA ("/") —
+// and a plugin can override that with RoutePriority. Registration order is NOT a
+// factor except as the tiebreak for fully-equal routes (the earliest wins, since
+// moreSpecific is strict).
+func longestPluginRoute(snap []pluginRoute, path string) int {
+	best := -1
+	for i := range snap {
+		if snap[i].matches(path) && (best < 0 || moreSpecific(snap[i], snap[best])) {
+			best = i
 		}
 	}
-	return pluginRoute{}, false
+	return best
+}
+
+// moreSpecific reports whether route a should win over b: higher priority first,
+// then longer pattern. Equal on both → false, so an equal-ranked incumbent (the
+// earlier-registered route already held as best) keeps the win.
+func moreSpecific(a, b pluginRoute) bool {
+	if a.priority != b.priority {
+		return a.priority > b.priority
+	}
+	return len(a.pattern) > len(b.pattern)
+}
+
+// pluginRoutesExcept returns every route matching path EXCEPT the one at
+// exceptIdx, most-specific first. Only used on the RARE path where the longest
+// match declined (returned nil) and routing must fall through — so the
+// allocation is off the common path. It includes same-length siblings of the
+// declined route (two plugins can claim the same pattern), not just strictly
+// shorter ones, so the "falls through to the next match" contract holds even for
+// a tie.
+func pluginRoutesExcept(snap []pluginRoute, path string, exceptIdx int) []pluginRoute {
+	var out []pluginRoute
+	for i, r := range snap {
+		if i != exceptIdx && r.matches(path) {
+			out = append(out, r)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return moreSpecific(out[i], out[j])
+	})
+	return out
 }
 
 // callHeaderInjectors fires every registered HeaderInjector on hreq.
@@ -282,17 +323,6 @@ func (g *Gateway) hasSealVerifier() bool {
 	return false
 }
 
-func (g *Gateway) hasUpstreamTrust() bool {
-	g.muPlugins.RLock()
-	defer g.muPlugins.RUnlock()
-	for _, e := range g.plugins {
-		if e.upstreamTrust != nil {
-			return true
-		}
-	}
-	return false
-}
-
 // callResponseInterceptors. Soft — interceptor failure is logged;
 // response keeps whatever shape it had before.
 func (g *Gateway) callResponseInterceptors(req *Request, resp *Response) {
@@ -358,7 +388,7 @@ func (g *Gateway) callHealthAggregators(ctx context.Context, report *HealthRepor
 // recordDispatchEventWithMode builds + fires a DispatchEvent from the
 // gateway's dispatch path. The outer handler reads resp.Mode to label
 // where the call actually ran.
-func (g *Gateway) recordDispatchEventWithMode(router, method, path string, status int, started time.Time, subject, errorCode, batchID, mode string) {
+func (g *Gateway) recordDispatchEventWithMode(router, method, path string, status int, started time.Time, subject, errorCode, batchID, mode, remoteIP, requestID string) {
 	g.muPlugins.RLock()
 	any := false
 	for _, e := range g.plugins {
@@ -378,6 +408,8 @@ func (g *Gateway) recordDispatchEventWithMode(router, method, path string, statu
 		Status:    status,
 		Duration:  time.Since(started),
 		Subject:   subject,
+		RemoteIP:  remoteIP,
+		RequestID: requestID,
 		ErrorCode: errorCode,
 		BatchID:   batchID,
 		Mode:      mode,

@@ -20,6 +20,7 @@ type pluginEntry struct {
 	upstreamTrust    UpstreamTrustPolicy
 	sealVerifier     SealVerifier
 	healthAggregator HealthAggregator
+	readinessContrib ReadinessContributor
 	resolver         Resolver
 	server           Server
 	ctxContributor   ContextContributor
@@ -80,6 +81,9 @@ func (e *pluginEntry) satisfiedHooks() []string {
 	if e.healthAggregator != nil {
 		out = append(out, "HealthAggregator")
 	}
+	if e.readinessContrib != nil {
+		out = append(out, "ReadinessContributor")
+	}
 	if e.resolver != nil {
 		out = append(out, "Resolver")
 	}
@@ -94,6 +98,9 @@ func (e *pluginEntry) satisfiedHooks() []string {
 	}
 	if e.recoveryHandler != nil {
 		out = append(out, "RecoveryHandler")
+	}
+	if e.logger != nil {
+		out = append(out, "Logger")
 	}
 	return out
 }

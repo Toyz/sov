@@ -13,27 +13,41 @@ import (
 // shared (e.g. Redis) backend behind multiple gateway replicas.
 type sharedStore struct {
 	mu sync.Mutex
-	m  map[string]RegisterEntry
+	m  map[string]map[string]RegisterEntry // service -> address -> entry (replicas)
 }
 
-func newSharedStore() *sharedStore { return &sharedStore{m: map[string]RegisterEntry{}} }
+func newSharedStore() *sharedStore {
+	return &sharedStore{m: map[string]map[string]RegisterEntry{}}
+}
 
 func (s *sharedStore) Put(svc string, e RegisterEntry) {
 	s.mu.Lock()
-	s.m[svc] = e
+	if s.m[svc] == nil {
+		s.m[svc] = map[string]RegisterEntry{}
+	}
+	s.m[svc][e.Address] = e
 	s.mu.Unlock()
 }
-func (s *sharedStore) Delete(svc string) {
+func (s *sharedStore) Delete(svc, address string) {
 	s.mu.Lock()
-	delete(s.m, svc)
+	if reps := s.m[svc]; reps != nil {
+		delete(reps, address)
+		if len(reps) == 0 {
+			delete(s.m, svc)
+		}
+	}
 	s.mu.Unlock()
 }
-func (s *sharedStore) Snapshot() map[string]RegisterEntry {
+func (s *sharedStore) Snapshot() map[string][]RegisterEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make(map[string]RegisterEntry, len(s.m))
-	for k, v := range s.m {
-		out[k] = v
+	out := make(map[string][]RegisterEntry, len(s.m))
+	for svc, reps := range s.m {
+		list := make([]RegisterEntry, 0, len(reps))
+		for _, e := range reps {
+			list = append(list, e)
+		}
+		out[svc] = list
 	}
 	return out
 }
@@ -41,10 +55,15 @@ func (s *sharedStore) ReapExpired(now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	changed := false
-	for k, e := range s.m {
-		if now.After(e.ExpiresAt) {
-			delete(s.m, k)
-			changed = true
+	for svc, reps := range s.m {
+		for addr, e := range reps {
+			if now.After(e.ExpiresAt) {
+				delete(reps, addr)
+				changed = true
+			}
+		}
+		if len(reps) == 0 {
+			delete(s.m, svc)
 		}
 	}
 	return changed
@@ -74,7 +93,7 @@ func TestRegisterStore_SharedConvergence(t *testing.T) {
 	}
 
 	// Delete on A propagates to B too.
-	a.Delete("Foo")
+	a.Delete("Foo", "http://foo:9000")
 	if !eventually(t, 2*time.Second, func() bool {
 		_, ok := b.Resolve(context.Background(), "Foo")
 		return !ok
@@ -88,7 +107,7 @@ func TestRegisterStore_CustomStoreIsWritten(t *testing.T) {
 	r := NewRegisterResolver(time.Hour, WithRegisterStore(store))
 	defer r.Close()
 	r.Put("Bar", "http://bar:9000", time.Hour)
-	if _, ok := store.m["Bar"]; !ok {
+	if _, ok := store.m["Bar"]["http://bar:9000"]; !ok {
 		t.Fatal("PutEntry must write through to the custom store")
 	}
 }

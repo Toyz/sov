@@ -24,13 +24,14 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/Toyz/sov/cmd/sov/call"
-	"github.com/Toyz/sov/cmd/sov/conform"
-	"github.com/Toyz/sov/cmd/sov/drift"
-	"github.com/Toyz/sov/cmd/sov/gen"
-	"github.com/Toyz/sov/cmd/sov/health"
-	initcmd "github.com/Toyz/sov/cmd/sov/init_cmd"
-	"github.com/Toyz/sov/cmd/sov/inspect"
+	"github.com/Toyz/sov/cmd/sov/internal/call"
+	"github.com/Toyz/sov/cmd/sov/internal/catalogcmd"
+	"github.com/Toyz/sov/cmd/sov/internal/conform"
+	"github.com/Toyz/sov/cmd/sov/internal/drift"
+	"github.com/Toyz/sov/cmd/sov/internal/gen"
+	"github.com/Toyz/sov/cmd/sov/internal/health"
+	initcmd "github.com/Toyz/sov/cmd/sov/internal/init_cmd"
+	"github.com/Toyz/sov/cmd/sov/internal/inspect"
 )
 
 func main() {
@@ -55,6 +56,8 @@ func main() {
 		os.Exit(call.Run(args, os.Stdout, os.Stderr))
 	case "conform":
 		os.Exit(conform.Run(args, os.Stdout, os.Stderr))
+	case "catalog":
+		os.Exit(catalogcmd.Run(args, os.Stdout, os.Stderr))
 	case "version", "--version", "-v":
 		printVersion(os.Stdout)
 	case "-h", "--help", "help":

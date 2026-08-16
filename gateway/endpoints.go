@@ -28,6 +28,11 @@ func (g *Gateway) frameworkEndpoint(ctx context.Context, req *Request) *Response
 			return ErrorResponse(&rpc.Error{Status: 405, Code: "BAD_REQUEST", Message: "method not allowed"})
 		}
 		return g.handleHealth(ctx)
+	case "/rpc/_ready":
+		if req.Method != http.MethodGet && req.Method != http.MethodPost {
+			return ErrorResponse(&rpc.Error{Status: 405, Code: "BAD_REQUEST", Message: "method not allowed"})
+		}
+		return g.handleReady(ctx)
 	case "/rpc/_introspect":
 		// Opt-in: the catalog discloses the full API surface, so the
 		// public endpoint is exposed only via gw.Use(introspect.New()).
@@ -43,6 +48,17 @@ func (g *Gateway) frameworkEndpoint(ctx context.Context, req *Request) *Response
 			return ErrorResponse(&rpc.Error{Status: 405, Code: "BAD_REQUEST", Message: "method not allowed"})
 		}
 		return g.handleIntrospect(ctx, req)
+	case "/rpc/_config":
+		// Opt-in sanitized runtime-config dump. Off by default; a closed
+		// endpoint 404s method-agnostically (like _introspect) so it looks
+		// ABSENT rather than leaking its existence via a 405.
+		if !g.configExposed {
+			return ErrorResponse(&rpc.Error{Status: 404, Code: "NOT_FOUND", Message: "not found"})
+		}
+		if req.Method != http.MethodGet && req.Method != http.MethodPost {
+			return ErrorResponse(&rpc.Error{Status: 405, Code: "BAD_REQUEST", Message: "method not allowed"})
+		}
+		return g.handleConfig(ctx)
 	}
 	return nil
 }

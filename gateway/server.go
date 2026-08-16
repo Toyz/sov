@@ -48,10 +48,37 @@ type Request struct {
 	// RemoteIP is the caller's source IP. Server picks it from
 	// X-Forwarded-For or the transport-level remote address.
 	RemoteIP string
+	// Host is the inbound request's Host (net/http lifts Host OUT of the header
+	// map into http.Request.Host, so it is otherwise invisible to a plugin
+	// reading req.Header). First-class so vhost/tenant routing, host-based
+	// policy, and audit can read it. Empty for in-process dispatched
+	// sub-requests (MCP, /rpc surfaces, batch), which carry no transport Host.
+	Host string
+	// RawQuery is the URL query string without the leading '?', e.g.
+	// "seconds=10". Empty for most business calls — the /rpc codec reads args
+	// from the body, not the query. Surfaced so a RouteHandler plugin (pprof,
+	// a custom GET endpoint) can read query params, which were otherwise
+	// inaccessible through the gateway's Request.
+	RawQuery string
 	// User is the authenticated subject, set by Server-side middleware
 	// before dispatch. nil for anonymous calls. Gateway copies this onto
 	// the rpc.Context handed to handlers.
 	User any
+
+	// recorded is set by RecordDispatch when a surface emits a specific
+	// dispatch event for this request (e.g. an MCP tools/call resolves to a
+	// router/method). handle then skips its generic per-request event so the
+	// call is counted ONCE, not double — the outer /mcp event PLUS the tool
+	// event. Unexported: internal bookkeeping, not part of the wire request.
+	recorded bool
+
+	// headerSnapshot is the header state captured at gateway ingress, BEFORE
+	// HeaderParser plugins mutate req.Header. sov:"header=" params bind from it
+	// so a bound value matches what the authz gate (AuthzService.Check) saw — a
+	// HeaderParser that rewrites a header cannot make the handler's param
+	// diverge from what was authorized. nil unless a registered method uses
+	// header= params (NeedsHeaderGetter). Unexported: internal, not wire state.
+	headerSnapshot Header
 }
 
 // Response is what the RequestHandler returns. Server writes it back.

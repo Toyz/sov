@@ -78,7 +78,14 @@ var (
 // New returns a static plugin from cfg. It panics if neither FS nor Dir
 // is set — a misconfigured asset server should fail at boot, not serve
 // 404s silently.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("static.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	fsys := cfg.FS
 	if fsys == nil {
 		if cfg.Dir == "" {

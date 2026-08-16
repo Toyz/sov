@@ -11,6 +11,7 @@ import (
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/batchstream"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -48,6 +49,24 @@ func TestBatchStream_RejectsEmptyCalls(t *testing.T) {
 	}
 }
 
+// A batch with more entries than MaxBatchSize is rejected 413 before streaming
+// starts — the streaming path is a fan-out DoS vector otherwise (HELL-296).
+func TestBatchStream_MaxBatchSize_Rejects(t *testing.T) {
+	h := batchstream.New(batchstream.Config{MaxBatchSize: 2})
+	body := `{"calls":{` +
+		`"a":{"service":"Echo","method":"ping"},` +
+		`"b":{"service":"Echo","method":"ping"},` +
+		`"c":{"service":"Echo","method":"ping"}}}`
+	resp := h.ServeRoute(context.Background(), &gateway.Request{
+		Method: http.MethodPost,
+		User:   "u_alice", // authenticated subject (checked before the size cap)
+		Body:   []byte(body),
+	})
+	if resp.Status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 for a batch over MaxBatchSize", resp.Status)
+	}
+}
+
 // ---- streaming happy path (full gateway) ----------------------------------
 
 type bsAuthRouter struct{}
@@ -68,7 +87,7 @@ type bsEchoRouter struct{}
 func (bsEchoRouter) Ping(ctx *rpc.Context) (string, error) { return "pong", nil }
 
 func TestBatchStream_StreamsFramePerEntry(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	gw.RegisterAuth(&bsAuthRouter{})
 	gw.Register(&bsEchoRouter{})
 	if err := gw.Use(batchstream.New()); err != nil {

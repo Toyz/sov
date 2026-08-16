@@ -5,8 +5,8 @@
 // last events without scraping logs — demonstrates the
 // plugin-as-also-a-service pattern.
 //
-//	gw.Use(audit.New(os.Stdout))                            // log + introspect-only
-//	gw.Use(audit.New(os.Stdout, audit.WithRingSize(500)))   // bigger ring
+//	gw.Use(audit.New())                                             // ring-only, no log stream
+//	gw.Use(audit.New(audit.Config{Out: os.Stdout, RingSize: 500}))  // log + bigger ring
 package audit
 
 import (
@@ -58,7 +58,14 @@ type Config struct {
 }
 
 // New returns the plugin from cfg.
-func New(cfg Config) *AuditRouter {
+func New(cfgs ...Config) *AuditRouter {
+	if len(cfgs) > 1 {
+		panic("audit.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	size := cfg.RingSize
 	if size <= 0 {
 		size = defaultRingSize
@@ -88,12 +95,22 @@ func (p *AuditRouter) OnDispatch(ev gateway.DispatchEvent) error {
 		_, _ = p.out.Write(append(line, '\n'))
 	}
 	p.mu.Lock()
+	// cursor is ALWAYS the next-write position. During growth we append (writing
+	// at len(ring) == cursor); once full we overwrite ring[cursor]. Advancing
+	// cursor on BOTH keeps recentEvents' newest-first math (cursor-1-i) correct
+	// while the ring is still filling — otherwise it read only empty slots and
+	// returned nothing until the ring was full.
 	if len(p.ring) < p.size {
 		p.ring = append(p.ring, ev)
 	} else {
+		// Ring full: this write evicts the oldest retained event. Count it so
+		// the introspect "dropped" gauge reflects how many events have aged out
+		// of the in-memory window (0 forever otherwise, which reads as "nothing
+		// lost" when in fact the ring has been churning).
 		p.ring[p.cursor] = ev
-		p.cursor = (p.cursor + 1) % p.size
+		p.dropped++
 	}
+	p.cursor = (p.cursor + 1) % p.size
 	p.mu.Unlock()
 	return nil
 }

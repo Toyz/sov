@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -48,6 +49,12 @@ func (s *NetHTTPServer) SetHeaderClaim(fn func(canonicalName string) bool) {
 type NetHTTPOptions struct {
 	// MaxBodyBytes caps the request body size. 0 → default 4 MiB.
 	MaxBodyBytes int64
+	// ReadTimeout bounds the TOTAL time to read a request (headers + body).
+	// 0 → default 30s. ReadHeaderTimeout alone only bounds the header phase, so
+	// without this a client that trickles the body arbitrarily slowly (a
+	// slowloris body variant) holds a goroutine + connection open indefinitely.
+	// Raise it if you accept large bodies over slow links.
+	ReadTimeout time.Duration
 	// HTTPServer, if set, is used verbatim and Addr/timeouts are
 	// honored. Otherwise the constructor builds a server with sensible
 	// defaults using ListenAndServe's addr.
@@ -64,12 +71,38 @@ type NetHTTPOptions struct {
 	//     them — pair with hmacseal/proto.Verify middleware to cryptographically
 	//     verify rather than trust the network alone).
 	TrustUpstreamClaims bool
+	// TrustProxyHeaders controls whether the client IP (Request.RemoteIP,
+	// stamped into audit events and re-forwarded as X-Forwarded-For to
+	// remotes) is read from the inbound X-Forwarded-For header.
+	//
+	//   false (default): use the transport-level peer address (r.RemoteAddr).
+	//     Correct for any gateway a client can reach directly — X-Forwarded-For
+	//     is attacker-controlled there, so trusting it lets a caller forge the
+	//     source IP in your audit trail and any IP-derived policy.
+	//
+	//   true: trust the left-most X-Forwarded-For hop. Set ONLY when the
+	//     gateway sits behind a trusted L7 proxy / load balancer that
+	//     overwrites (not appends to) X-Forwarded-For with the real client IP.
+	TrustProxyHeaders bool
+	// TLSConfig, when set, makes the server serve HTTPS (ListenAndServeTLS)
+	// using its Certificates — the in-memory way to terminate TLS in-process
+	// (self-signed dev, or a cert loaded from a secret manager). Alternatively
+	// set CertFile/KeyFile to load from disk. Either one switches the server
+	// from plaintext to TLS.
+	TLSConfig *tls.Config
+	// CertFile / KeyFile are PEM paths; when CertFile is set the server serves
+	// HTTPS from them. Ignored when empty (unless TLSConfig is set).
+	CertFile string
+	KeyFile  string
 }
 
 // NewNetHTTPServer returns a Server backed by net/http.
 func NewNetHTTPServer(opts NetHTTPOptions) *NetHTTPServer {
 	if opts.MaxBodyBytes == 0 {
 		opts.MaxBodyBytes = 4 << 20 // 4 MiB
+	}
+	if opts.ReadTimeout == 0 {
+		opts.ReadTimeout = 30 * time.Second
 	}
 	return &NetHTTPServer{opts: opts}
 }
@@ -90,15 +123,27 @@ func (s *NetHTTPServer) ListenAndServe(ctx context.Context, addr string) error {
 	if srv == nil {
 		srv = &http.Server{
 			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       s.opts.ReadTimeout,
 			WriteTimeout:      60 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		}
 	}
 	srv.Addr = addr
 	srv.Handler = mux
+	if s.opts.TLSConfig != nil {
+		srv.TLSConfig = s.opts.TLSConfig
+	}
 
+	// Serve TLS when a TLSConfig (inline certs) or a cert/key file pair is
+	// configured — including a TLSConfig set on a caller-supplied HTTPServer,
+	// which http.Server.ListenAndServe would otherwise silently ignore
+	// (plaintext). ListenAndServeTLS("","") uses srv.TLSConfig.Certificates.
+	serveFn := srv.ListenAndServe
+	if srv.TLSConfig != nil || s.opts.CertFile != "" {
+		serveFn = func() error { return srv.ListenAndServeTLS(s.opts.CertFile, s.opts.KeyFile) }
+	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- serveFn() }()
 
 	select {
 	case <-ctx.Done():
@@ -149,9 +194,11 @@ func (s *NetHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
 	req := &Request{
 		Method:   r.Method,
 		Path:     r.URL.Path,
+		RawQuery: r.URL.RawQuery,
 		Header:   hdr,
 		Body:     body,
-		RemoteIP: remoteIPFromHTTP(r),
+		RemoteIP: remoteIPFromHTTP(r, s.opts.TrustProxyHeaders),
+		Host:     r.Host,
 	}
 
 	resp := s.handler(r.Context(), req)
@@ -233,12 +280,17 @@ func isIdentityHeader(canonical string) bool {
 	return false
 }
 
-func remoteIPFromHTTP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i > 0 {
-			return strings.TrimSpace(xff[:i])
+func remoteIPFromHTTP(r *http.Request, trustProxy bool) string {
+	// X-Forwarded-For is client-settable, so honor it only when the operator
+	// has vouched for an upstream proxy that rewrites it. Otherwise the socket
+	// peer is the only trustworthy source of the client IP.
+	if trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i > 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

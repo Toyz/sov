@@ -165,32 +165,55 @@ type ClaimsCache interface {
 }
 
 // memClaimsCache is the default in-memory ClaimsCache. Token is used only
-// as a map key, never logged.
+// as a map key, never logged. Beyond honoring claims.ExpiresAt, it caps every
+// entry at ttl so a verified identity is re-checked against the auth service at
+// least that often — bounding how long a revoked token (or a token with no
+// expiry at all) can be served from cache.
 type memClaimsCache struct {
 	mu      sync.Mutex
-	entries map[string]*Claims
+	entries map[string]cachedClaims
+	ttl     time.Duration
+	now     func() time.Time
 }
 
-func newMemClaimsCache() *memClaimsCache { return &memClaimsCache{entries: map[string]*Claims{}} }
+type cachedClaims struct {
+	cl *Claims
+	at time.Time
+}
+
+func newMemClaimsCache(ttl time.Duration) *memClaimsCache {
+	return &memClaimsCache{
+		entries: map[string]cachedClaims{},
+		ttl:     ttl,
+		now:     func() time.Time { return time.Now().UTC() },
+	}
+}
 
 func (c *memClaimsCache) Get(token string) (*Claims, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	cl, ok := c.entries[token]
+	e, ok := c.entries[token]
 	if !ok {
 		return nil, false
 	}
-	if !cl.ExpiresAt.IsZero() && time.Now().UTC().After(cl.ExpiresAt) {
+	now := c.now()
+	// Max-age cap: re-verify at least every ttl, so revocation propagates within
+	// that window even for a long-lived or non-expiring token.
+	if c.ttl > 0 && now.Sub(e.at) > c.ttl {
 		delete(c.entries, token)
 		return nil, false
 	}
-	return cl, true
+	if !e.cl.ExpiresAt.IsZero() && now.After(e.cl.ExpiresAt) {
+		delete(c.entries, token)
+		return nil, false
+	}
+	return e.cl, true
 }
 
 func (c *memClaimsCache) Put(token string, cl *Claims) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[token] = cl
+	c.entries[token] = cachedClaims{cl: cl, at: c.now()}
 }
 
 // verifyToken calls the configured AuthService.{verify} via the
@@ -213,10 +236,12 @@ func (g *Gateway) verifyToken(ctx context.Context, token string) (*Claims, error
 	sub := &Request{
 		Method: http.MethodPost,
 		Path:   "/rpc/" + g.authBinding.Service + "/" + g.authBinding.Method,
-		Header: Header{}, // never forward inbound headers for the verify call
+		// Pin JSON so this sub-dispatch decodes as JSON regardless of any
+		// SetCodec-swapped default; never forward inbound headers for verify.
+		Header: Header{"Content-Type": "application/json"},
 		Body:   body,
 	}
-	resp := g.routeBusiness(ctx, sub)
+	resp := g.Dispatch(ctx, sub)
 	if resp.Status >= 400 {
 		return nil, claimsErrorFromBody(resp)
 	}
@@ -252,10 +277,11 @@ func (g *Gateway) checkAuthz(ctx context.Context, claims *Claims, service, metho
 	sub := &Request{
 		Method: http.MethodPost,
 		Path:   "/rpc/" + g.authzBinding.Service + "/" + g.authzBinding.Method,
-		Header: Header{},
+		// Pin JSON: decode as JSON regardless of a SetCodec-swapped default.
+		Header: Header{"Content-Type": "application/json"},
 		Body:   body,
 	}
-	resp := g.routeBusiness(ctx, sub)
+	resp := g.Dispatch(ctx, sub)
 	if resp.Status >= 400 {
 		return claimsErrorFromBody(resp)
 	}
@@ -280,6 +306,17 @@ func (g *Gateway) checkAuthz(ctx context.Context, claims *Claims, service, metho
 		return rpc.Unauthorized("%s", reason)
 	}
 	return rpc.Forbidden("%s", reason)
+}
+
+// Authorize runs the bound AuthzService against (claims, router, method) with
+// the method's DECLARED perm (engine.Perm) and the caller's headers — the same
+// gate authzMiddleware applies on /rpc. Returns nil when allowed, or when no
+// authz service is bound. A surface that dispatches a method OUTSIDE the /rpc
+// middleware chain — MCP tools routing through Dispatch — calls this so authz
+// applies exactly as it would over /rpc.
+func (g *Gateway) Authorize(ctx context.Context, claims *Claims, router, method string, headers Header) error {
+	perm := g.engine.Perm(router, method)
+	return g.checkAuthz(ctx, claims, router, method, perm, headers)
 }
 
 // authMiddleware runs first in the middleware chain. It strips the
@@ -392,13 +429,11 @@ func (g *Gateway) authzMiddleware() Middleware {
 			if !ok {
 				return next(ctx, req)
 			}
-			// Resolve the method's DECLARED authz requirement (HELL-280)
-			// from the local engine and hand it to Check alongside the
-			// caller's headers (HELL-278). Remote methods aren't in the
-			// local engine → perm is "" here and enforced at their home
-			// gateway; the AuthzService treats "" as its own default.
-			perm := g.engine.Perm(router, method)
-			if err := g.checkAuthz(ctx, claims, router, method, perm, req.Header); err != nil {
+			// Same gate Authorize applies (it resolves the method's declared
+			// perm and calls the AuthzService) — call it, so /rpc and any surface
+			// that reaches Authorize outside this middleware (MCP) share ONE
+			// implementation and can't drift.
+			if err := g.Authorize(ctx, claims, router, method, req.Header); err != nil {
 				return ErrorResponseFromAny(err)
 			}
 			return next(ctx, req)

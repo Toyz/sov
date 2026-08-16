@@ -298,6 +298,13 @@ A pod returns its own catalog so the gateway can merge it. Minimal valid body:
 ELEMENT type when `schemaType=="array"` (so codegen emits `Elem[]`, not `unknown[]`). `types`/`cross_refs`
 may be empty — the gateway rebuilds the org-wide catalog from merged `services`.
 
+A field with `source: "header"` binds from the request HEADER named by `header` (declared
+`sov:"header=X-Tenant-Id"`) instead of the JSON body. Such a field carries no JSON wire name and takes
+no `position`; it MUST be excluded from the request-body/type schema (it never appears in `types` or in a
+generated body type) while remaining on the method's `params` so a UI can show it. Its header name MUST
+NOT be in the reserved `X-Sov-*` namespace (that channel carries verified claims). A polyglot pod
+exposing `/rpc/_introspect` by hand must follow the same rule.
+
 **Field optionality (codegen):** a field is OPTIONAL in a generated type iff it can be ABSENT on the
 wire — `omitempty` is set (may be dropped) or `nullable` is true (the Go field is a pointer → may be
 null/absent). A non-`omitempty` non-pointer field is always present and therefore REQUIRED. `required`
@@ -305,12 +312,13 @@ is a SEPARATE, validation-only signal (`sov:"required"`) and does **not** drive 
 field is required even when `required` is false. This rule is uniform across params and response/model
 types.
 
-**`hasParams`** is the CLIENT-facing truth — "the caller must send a params object." It reflects the
-wire-field count, not merely that the Go method takes a `*Params` struct: a method whose params struct
-has zero wire fields (empty, or every field header/owner-injected) reports `hasParams: false` and emits
-`params: void`. A polyglot pod must follow the same rule, or set `hasParams` and ship the matching
-`params` — emitting `hasParams: true` with zero `params` would make a generated client name a params
-type that was never shipped.
+**`hasParams`** reflects whether the Go method takes a `*Params` struct with any declared field — body
+OR header — so a UI (the explorer) can render the full parameter list. The CLIENT-facing "must the caller
+send a params object" truth is the BODY-field count: fields with `source != "header"`. A method whose
+params struct has zero body fields (empty, or every field is header-bound/owner-injected) takes NO params
+argument and emits `params: void`, even when `hasParams` is `true`. A polyglot pod must gate its
+generated params argument on the body-field count, not on `hasParams` alone — emitting a required params
+type for a method whose only inputs are headers would force callers to send a meaningless `{}`.
 
 Cascade loop-guard headers (honor these if you fan out to further pods):
 

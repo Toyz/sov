@@ -10,6 +10,7 @@ import (
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/static"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -23,7 +24,7 @@ func tree() fstest.MapFS {
 
 func serve(t *testing.T, p *static.Plugin, method, path string) *gateway.Response {
 	t.Helper()
-	gw := gateway.New()
+	gw := gwtest.New()
 	gw.ExposeIntrospect() // opt-in endpoint; TestRPCNotShadowed asserts it isn't shadowed
 	if err := gw.Use(p); err != nil {
 		t.Fatalf("Use static: %v", err)
@@ -168,7 +169,7 @@ func (PingRouter) Ping(ctx *rpc.Context) (string, error) { return "pong", nil }
 // business dispatch, and "/" still serves the SPA. Exercises the full chain:
 // reserved-decline + gateway nil-fall-through.
 func TestStaticDoesNotShadowBusinessRPC(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	gw.Register(&PingRouter{})
 	gw.MustUse(static.New(static.Config{FS: tree(), SPAFallback: true})) // catch-all "/"
 

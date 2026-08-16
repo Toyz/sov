@@ -8,6 +8,7 @@ import (
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/gateway/builtin/cors"
 	"github.com/Toyz/sov/gateway/builtin/requestid"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -16,7 +17,7 @@ type PingRouter struct{}
 func (r *PingRouter) Hello(_ *rpc.Context) (string, error) { return "hi", nil }
 
 func TestCORS_DefaultAllowsAny(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	if err := gw.Use(requestid.New(requestid.Config{})); err != nil {
 		t.Fatalf("Use requestid: %v", err)
 	}
@@ -39,7 +40,7 @@ func TestCORS_DefaultAllowsAny(t *testing.T) {
 }
 
 func TestCORS_RestrictedOrigin(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	if err := gw.Use(requestid.New(requestid.Config{})); err != nil {
 		t.Fatalf("Use requestid: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestCORS_RestrictedOrigin(t *testing.T) {
 }
 
 func TestCORS_PreflightShortCircuits(t *testing.T) {
-	gw := gateway.New()
+	gw := gwtest.New()
 	if err := gw.Use(requestid.New(requestid.Config{})); err != nil {
 		t.Fatalf("Use requestid: %v", err)
 	}

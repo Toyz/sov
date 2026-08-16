@@ -1,191 +1,112 @@
-package gateway
+package gateway_test
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+	"time"
+
+	. "github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
+	"github.com/Toyz/sov/rpc"
 )
 
-// A RouteHandler-style streaming Response is copied to the wire verbatim,
-// the plugin's Content-Type is kept (not defaulted to JSON), and no
-// Content-Length is set (chunked).
-func TestNetHTTP_StreamsResponse(t *testing.T) {
-	s := NewNetHTTPServer(NetHTTPOptions{})
-	s.Handle(func(ctx context.Context, req *Request) *Response {
-		return &Response{
-			Status: 200,
-			Header: Header{"Content-Type": "application/zip"},
-			Stream: PipeStream(func(w io.Writer) error {
-				for i := 0; i < 3; i++ {
-					if _, err := io.WriteString(w, "chunk"); err != nil {
-						return err
-					}
-				}
-				return nil
-			}),
+type TickerRouter struct{}
+
+type TickParams struct {
+	N int `sov:"n"`
+}
+
+// Count server-streams integers 0..N-1 as NDJSON.
+func (r *TickerRouter) Count(_ *rpc.Context, p *TickParams) (rpc.Stream[int], error) {
+	return rpc.StreamOf(func(yield func(int) bool) {
+		for i := 0; i < p.N; i++ {
+			if !yield(i) {
+				return
+			}
 		}
-	})
-
-	rec := httptest.NewRecorder()
-	s.serve(rec, httptest.NewRequest("GET", "/dl", nil))
-
-	if rec.Code != 200 {
-		t.Fatalf("status=%d", rec.Code)
-	}
-	if got := rec.Body.String(); got != "chunkchunkchunk" {
-		t.Fatalf("body=%q", got)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/zip" {
-		t.Fatalf("content-type=%q, want application/zip (must not default to JSON for a stream)", ct)
-	}
-	if cl := rec.Header().Get("Content-Length"); cl != "" {
-		t.Errorf("Content-Length=%q set on a stream; want chunked (empty)", cl)
-	}
+	}), nil
 }
 
-// Stream takes precedence over Body when both are set.
-func TestNetHTTP_StreamBeatsBody(t *testing.T) {
-	s := NewNetHTTPServer(NetHTTPOptions{})
-	s.Handle(func(ctx context.Context, req *Request) *Response {
-		return &Response{
-			Status: 200,
-			Body:   []byte("BUFFERED"),
-			Stream: strings.NewReader("STREAMED"),
-		}
-	})
-	rec := httptest.NewRecorder()
-	s.serve(rec, httptest.NewRequest("GET", "/x", nil))
-	if got := rec.Body.String(); got != "STREAMED" {
-		t.Fatalf("body=%q, want STREAMED (Stream must win over Body)", got)
-	}
+// Boom validates and fails BEFORE returning a stream — must surface as a normal
+// buffered error, not a stream.
+func (r *TickerRouter) Boom(_ *rpc.Context, _ *TickParams) (rpc.Stream[int], error) {
+	return rpc.Stream[int]{}, rpc.BadRequest("nope")
 }
 
-// PipeStream surfaces the producer's error to the reader (so the adapter's
-// io.Copy returns it) and delivers everything written before the error.
-func TestPipeStream_ErrorPropagates(t *testing.T) {
-	boom := errors.New("boom")
-	r := PipeStream(func(w io.Writer) error {
-		_, _ = io.WriteString(w, "partial")
-		return boom
-	})
-	got, err := io.ReadAll(r)
-	if string(got) != "partial" {
-		t.Fatalf("read %q, want partial", got)
+func drain(t *testing.T, resp *Response) string {
+	t.Helper()
+	if resp.Stream == nil {
+		t.Fatalf("expected a Stream response, got status=%d body=%s", resp.Status, resp.Body)
 	}
-	if !errors.Is(err, boom) {
-		t.Fatalf("err=%v, want boom", err)
+	data, err := io.ReadAll(resp.Stream)
+	if c, ok := resp.Stream.(io.Closer); ok {
+		c.Close()
 	}
-}
-
-// A panic in the producer is contained: it does not crash the process
-// (the goroutine is outside the gateway's recovery middleware), it
-// surfaces to the reader as an error, and bytes written before the panic
-// are still delivered.
-func TestPipeStream_PanicContained(t *testing.T) {
-	r := PipeStream(func(w io.Writer) error {
-		_, _ = io.WriteString(w, "partial")
-		panic("producer exploded")
-	})
-	got, err := io.ReadAll(r)
-	if string(got) != "partial" {
-		t.Fatalf("read %q, want partial", got)
-	}
-	if err == nil {
-		t.Fatal("err=nil, want stream-producer-panic error")
-	}
-	if !strings.Contains(err.Error(), "producer exploded") {
-		t.Fatalf("err=%v, want panic value surfaced", err)
-	}
-}
-
-// Streamed bytes are flushed to the client as produced, not buffered until
-// the stream ends — the property MCP SSE depends on. Uses a real server +
-// chunked client read: the first frame must arrive while the producer is
-// still blocked waiting to send the second.
-func TestNetHTTP_StreamFlushesPerFrame(t *testing.T) {
-	gate := make(chan struct{})
-	s := NewNetHTTPServer(NetHTTPOptions{})
-	s.Handle(func(ctx context.Context, req *Request) *Response {
-		return &Response{
-			Status: 200,
-			Header: Header{"Content-Type": "text/event-stream"},
-			Stream: PipeStream(func(w io.Writer) error {
-				if _, err := io.WriteString(w, "data: one\n\n"); err != nil {
-					return err
-				}
-				<-gate // block until the client confirms it got frame one
-				_, err := io.WriteString(w, "data: two\n\n")
-				return err
-			}),
-		}
-	})
-
-	srv := httptest.NewServer(http.HandlerFunc(s.serve))
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/sse")
 	if err != nil {
-		t.Fatalf("get: %v", err)
+		t.Fatalf("drain: %v", err)
 	}
-	defer resp.Body.Close()
+	return string(data)
+}
 
-	buf := make([]byte, len("data: one\n\n"))
-	if _, err := io.ReadFull(resp.Body, buf); err != nil {
-		t.Fatalf("read frame one: %v", err)
+func TestStreaming_LocalNDJSON(t *testing.T) {
+	gw := gwtest.New()
+	gw.Register(&TickerRouter{})
+
+	resp := gw.Dispatch(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/Ticker/count", Header: Header{}, Body: []byte(`{"args":[{"n":3}]}`),
+	})
+	if resp.Status != 200 {
+		t.Fatalf("status=%d body=%s", resp.Status, resp.Body)
 	}
-	if string(buf) != "data: one\n\n" {
-		t.Fatalf("frame one=%q", buf)
+	if ct := resp.Header.Get("Content-Type"); ct != "application/x-ndjson" {
+		t.Fatalf("content-type=%q, want application/x-ndjson", ct)
 	}
-	// We received frame one before unblocking frame two → it was flushed,
-	// not buffered behind the rest of the response.
-	close(gate)
-	rest, _ := io.ReadAll(resp.Body)
-	if string(rest) != "data: two\n\n" {
-		t.Fatalf("frame two=%q", rest)
+	if got := drain(t, resp); got != "0\n1\n2\n" {
+		t.Fatalf("ndjson = %q, want 0\\n1\\n2\\n", got)
 	}
 }
 
-// End-to-end: a zip streamed through the adapter is a valid archive — the
-// real mininote-export shape.
-func TestPipeStream_ZipRoundTrips(t *testing.T) {
-	s := NewNetHTTPServer(NetHTTPOptions{})
-	s.Handle(func(ctx context.Context, req *Request) *Response {
-		return &Response{
-			Status: 200,
-			Header: Header{"Content-Type": "application/zip"},
-			Stream: PipeStream(func(w io.Writer) error {
-				zw := zip.NewWriter(w)
-				f, err := zw.Create("note.md")
-				if err != nil {
-					return err
-				}
-				if _, err := io.WriteString(f, "# hello"); err != nil {
-					return err
-				}
-				return zw.Close()
-			}),
-		}
-	})
-	rec := httptest.NewRecorder()
-	s.serve(rec, httptest.NewRequest("GET", "/export.zip", nil))
+// A handler error before the stream is returned must come back as a buffered
+// error response (status settable), never a half-open stream.
+func TestStreaming_PreStreamErrorIsBuffered(t *testing.T) {
+	gw := gwtest.New()
+	gw.Register(&TickerRouter{})
 
-	zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
-	if err != nil {
-		t.Fatalf("not a valid zip: %v", err)
+	resp := gw.Dispatch(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/Ticker/boom", Header: Header{}, Body: []byte(`{"args":[{"n":1}]}`),
+	})
+	if resp.Stream != nil {
+		t.Fatal("a pre-stream error must be buffered, not streamed")
 	}
-	if len(zr.File) != 1 || zr.File[0].Name != "note.md" {
-		t.Fatalf("zip entries=%v", zr.File)
+	if resp.Status != 400 {
+		t.Fatalf("status=%d body=%s, want 400", resp.Status, resp.Body)
 	}
-	rc, _ := zr.File[0].Open()
-	defer rc.Close()
-	content, _ := io.ReadAll(rc)
-	if string(content) != "# hello" {
-		t.Fatalf("entry content=%q", content)
+}
+
+// A remote replica emitting NDJSON streams THROUGH the gateway unbuffered —
+// streaming survives a mesh hop (W2.7).
+func TestStreaming_MeshStreamsThrough(t *testing.T) {
+	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		w.WriteHeader(200)
+		fmt.Fprint(w, "0\n1\n2\n")
+	}))
+	defer back.Close()
+
+	gw := gwtest.New()
+	gw.RegisterResolver().Put("Ticker", back.URL, time.Minute)
+
+	resp := gw.Dispatch(context.Background(), &Request{
+		Method: http.MethodPost, Path: "/rpc/Ticker/count", Header: Header{}, Body: []byte(`{"args":[{"n":3}]}`),
+	})
+	if resp.Status != 200 {
+		t.Fatalf("status=%d", resp.Status)
+	}
+	if got := drain(t, resp); got != "0\n1\n2\n" {
+		t.Fatalf("mesh stream-through = %q, want 0\\n1\\n2\\n", got)
 	}
 }

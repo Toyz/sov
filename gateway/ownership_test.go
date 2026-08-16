@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	. "github.com/Toyz/sov/gateway"
+	"github.com/Toyz/sov/gateway/internal/gwtest"
 	"github.com/Toyz/sov/rpc"
 )
 
@@ -62,7 +63,7 @@ func introspect(t *testing.T, gw *Gateway) *IntrospectReport {
 }
 
 func TestOwnership_ProducerOwnsConsumerConsumes(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&WidgetMakerRouter{})
 	gw.Register(&WidgetReaderRouter{})
 
@@ -86,7 +87,7 @@ func TestOwnership_ProducerOwnsConsumerConsumes(t *testing.T) {
 }
 
 func TestOwnership_RequestOnlyTypeIsUnowned(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&WidgetReaderRouter{}) // only consumes Widget, nobody produces it
 	rpt := introspect(t, gw)
 	td, ok := rpt.Types["Widget"]
@@ -99,7 +100,7 @@ func TestOwnership_RequestOnlyTypeIsUnowned(t *testing.T) {
 }
 
 func TestOwnership_TwoProducersIsAmbiguous(t *testing.T) {
-	gw := New()
+	gw := gwtest.New()
 	gw.Register(&WidgetMakerRouter{})
 	gw.Register(&SecondMakerRouter{})
 
