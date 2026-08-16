@@ -385,13 +385,23 @@ func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method strin
 	// plugin owns that header now.
 	g.callHeaderInjectors(ctx, req, hreq)
 
+	// Circuit breaker: after repeated transport failures to this upstream,
+	// fail fast instead of making every call wait out the full proxy timeout.
+	if !g.breakers.allow(base) {
+		return ErrorResponse(&rpc.Error{
+			Status: http.StatusServiceUnavailable, Code: "UPSTREAM_CIRCUIT_OPEN",
+			Message: fmt.Sprintf("upstream %s circuit open (failing fast after repeated errors)", base),
+		})
+	}
 	resp, err := g.proxy.Do(hreq)
 	if err != nil {
+		g.breakers.record(base, false)
 		return ErrorResponse(&rpc.Error{
 			Status: http.StatusBadGateway, Code: "UPSTREAM_UNAVAILABLE",
 			Message: fmt.Sprintf("proxy %s/%s: %v", router, method, err),
 		})
 	}
+	g.breakers.record(base, true)
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 

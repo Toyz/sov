@@ -23,7 +23,8 @@ type Gateway struct {
 	server        Server
 	register      *RegisterResolver
 	proxy         *http.Client
-	dispatch      Handler // wrapped chain (middleware → handle)
+	breakers      *breakerManager // per-upstream circuit breaker on remote dispatch
+	dispatch      Handler         // wrapped chain (middleware → handle)
 
 	// Auth + authz bindings. Both optional. The gateway calls the
 	// designated service via its own dispatch path for every request
@@ -86,6 +87,10 @@ type Options struct {
 	// Redis/memcached-backed impl to share auth-verify results across a
 	// fleet of gateway replicas. Default: per-replica in-memory.
 	ClaimsCache ClaimsCache
+	// RemoteBreaker tunes the per-upstream circuit breaker on remote
+	// dispatch (default: 5 consecutive failures → open, 10s cooldown). Set
+	// RemoteBreaker.Disabled to turn it off.
+	RemoteBreaker BreakerConfig
 }
 
 // Middleware wraps the gateway's request handler. Return a non-nil
@@ -191,6 +196,7 @@ func New(opts ...Option) *Gateway {
 		proxy:         o.ProxyClient,
 		authCache:     o.ClaimsCache,
 		middlewares:   append([]Middleware{}, o.Middleware...),
+		breakers:      newBreakerManager(o.RemoteBreaker),
 	}
 	g.defaultRecovery = &defaultRecoveryHandler{gw: g}
 	// Route rpc.Engine boot warnings (HELL-281) through the gateway's
