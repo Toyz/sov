@@ -26,6 +26,7 @@ type Gateway struct {
 	proxy         *http.Client
 	breakers      *breakerManager // per-upstream circuit breaker on remote dispatch
 	serving       atomic.Int32    // serving state (starting|ready|draining) for /rpc/_ready
+	inFlight      atomic.Int64    // requests currently in the dispatch chain (in-flight gauge)
 	dispatch      Handler         // wrapped chain (middleware → handle)
 
 	// Auth + authz bindings. Both optional. The gateway calls the

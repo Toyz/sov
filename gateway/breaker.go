@@ -121,3 +121,34 @@ func (m *breakerManager) record(addr string, ok bool) {
 		b.failures = 0 // reopening restarts the cooldown; counter is closed-state only
 	}
 }
+
+// snapshot returns each known upstream's current breaker state.
+func (m *breakerManager) snapshot() map[string]breakerState {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]breakerState, len(m.buckets))
+	for k, b := range m.buckets {
+		out[k] = b.state
+	}
+	return out
+}
+
+// BreakerSnapshot returns each known upstream's circuit-breaker state as an int
+// (0=closed, 1=open, 2=half-open) for observability — e.g. a metrics gauge or a
+// health rollup. An upstream that has never failed is absent (implicitly
+// closed).
+func (g *Gateway) BreakerSnapshot() map[string]int {
+	if g.breakers == nil {
+		return nil
+	}
+	raw := g.breakers.snapshot()
+	out := make(map[string]int, len(raw))
+	for k, v := range raw {
+		out[k] = int(v)
+	}
+	return out
+}
+
+// InFlight is the number of requests currently being handled. Counted at the
+// outermost middleware, so it spans the whole dispatch chain.
+func (g *Gateway) InFlight() int64 { return g.inFlight.Load() }

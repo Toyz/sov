@@ -98,6 +98,8 @@ func (g *Gateway) recordDispatchMiddleware() Middleware {
 	return func(next Handler) Handler {
 		return func(ctx context.Context, req *Request) *Response {
 			started := time.Now()
+			g.inFlight.Add(1)
+			defer g.inFlight.Add(-1)
 			resp := next(ctx, req)
 			if resp != nil && !req.recorded {
 				router, method, _ := rpc.SplitRPCPath(req.Path)

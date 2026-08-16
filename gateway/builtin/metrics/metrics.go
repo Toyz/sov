@@ -20,6 +20,7 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -213,11 +214,44 @@ func (p *Plugin) ServeRoute(_ context.Context, _ *gateway.Request) *gateway.Resp
 		fmt.Fprintf(&sb, "%s_count{%s} %d\n", histName, labelStr, p.durationCnt[k])
 	}
 
+	p.renderGauges(&sb, ns)
+
 	return &gateway.Response{
 		Status: 200,
 		Header: gateway.Header{"Content-Type": "text/plain; version=0.0.4; charset=utf-8"},
 		Body:   []byte(sb.String()),
 	}
+}
+
+// renderGauges appends the point-in-time gauges a dashboard needs but the
+// counter/histogram can't express: in-flight requests, per-upstream breaker
+// state, and Go runtime/process stats.
+func (p *Plugin) renderGauges(sb *strings.Builder, ns string) {
+	if p.gw != nil {
+		inflight := ns + "_in_flight_requests"
+		fmt.Fprintf(sb, "# HELP %s Requests currently being handled.\n# TYPE %s gauge\n%s %d\n", inflight, inflight, inflight, p.gw.InFlight())
+
+		if states := p.gw.BreakerSnapshot(); len(states) > 0 {
+			bname := ns + "_upstream_breaker_state"
+			fmt.Fprintf(sb, "# HELP %s Circuit breaker state per upstream (0=closed,1=open,2=half_open).\n# TYPE %s gauge\n", bname, bname)
+			addrs := make([]string, 0, len(states))
+			for a := range states {
+				addrs = append(addrs, a)
+			}
+			sort.Strings(addrs)
+			for _, a := range addrs {
+				fmt.Fprintf(sb, "%s{addr=%q} %d\n", bname, a, states[a])
+			}
+		}
+	}
+
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	fmt.Fprintf(sb, "# HELP go_goroutines Number of goroutines that currently exist.\n# TYPE go_goroutines gauge\ngo_goroutines %d\n", runtime.NumGoroutine())
+	fmt.Fprintf(sb, "# HELP go_memstats_alloc_bytes Bytes of allocated heap objects.\n# TYPE go_memstats_alloc_bytes gauge\ngo_memstats_alloc_bytes %d\n", ms.Alloc)
+	fmt.Fprintf(sb, "# HELP go_memstats_sys_bytes Bytes of memory obtained from the OS.\n# TYPE go_memstats_sys_bytes gauge\ngo_memstats_sys_bytes %d\n", ms.Sys)
+	fmt.Fprintf(sb, "# HELP go_memstats_heap_inuse_bytes Bytes in in-use heap spans.\n# TYPE go_memstats_heap_inuse_bytes gauge\ngo_memstats_heap_inuse_bytes %d\n", ms.HeapInuse)
+	fmt.Fprintf(sb, "# HELP go_gc_cycles_total Number of completed GC cycles.\n# TYPE go_gc_cycles_total counter\ngo_gc_cycles_total %d\n", ms.NumGC)
 }
 
 // ContributeIntrospect dumps a compact snapshot into the plugin's
