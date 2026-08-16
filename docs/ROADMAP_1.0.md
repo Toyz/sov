@@ -41,12 +41,12 @@ policy. Verify with live examples, not just `go test`.
   in the tag grammar; enforce in a post-bind pass; surface to OpenAPI/MCP/codegen. (protocol #1)
 - [x] **W2.2 Request caps** `[P0][S-M]` — `maxitems`/`maxlen` per field + global max array
   len / nesting depth guard in the decode path (decode-amplification DoS). (protocol #2, security P2-6)
-- [ ] **W2.3 Error taxonomy** `[P0][M]` — add `Retryable`, `Details []FieldError`, `RetryAfter`
+- [x] **W2.3 Error taxonomy** `[P0][M]` — add `Retryable`, `Details []FieldError`, `RetryAfter`
   to `rpc.Error` + wire; populate Details from W2.1; thread into codegen `SovError` + OpenAPI;
   generate the `ErrorCode` union from registered codes (stop hardcoding). (protocol #3)
 - [ ] **W2.4 Pagination envelope** `[P1][M]` — optional `rpc.Page[T]` (`items,next_cursor,
   has_more`) + `PageParams`; codegen async-iterator. (protocol #4)
-- [ ] **W2.5 Idempotency-key + store seam** `[P1][M]` — `Idempotency-Key` header +
+- [x] **W2.5 Idempotency-key + store seam** `[P1][M]` — `Idempotency-Key` header +
   `IdempotencyStore` iface (in-mem default), short-circuit replays. Pairs with W1.4. (protocol #5)
 - [x] **W2.6 Method-level deprecation + Sunset** `[P1][S-M]` — `deprecated[=reason]` on the
   method sentinel; `MethodDescriptor.Deprecated`; emit to introspect/OpenAPI/codegen +
