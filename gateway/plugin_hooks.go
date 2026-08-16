@@ -307,17 +307,6 @@ func (g *Gateway) hasSealVerifier() bool {
 	return false
 }
 
-func (g *Gateway) hasUpstreamTrust() bool {
-	g.muPlugins.RLock()
-	defer g.muPlugins.RUnlock()
-	for _, e := range g.plugins {
-		if e.upstreamTrust != nil {
-			return true
-		}
-	}
-	return false
-}
-
 // callResponseInterceptors. Soft — interceptor failure is logged;
 // response keeps whatever shape it had before.
 func (g *Gateway) callResponseInterceptors(req *Request, resp *Response) {

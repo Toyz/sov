@@ -387,8 +387,10 @@ func (g *Gateway) ListenAndServe(ctx context.Context, addr string) error {
 	// when the network between gateway and pod is not trusted. We warn
 	// (not refuse) when trust is on with no verifier so the operator knows
 	// the pod is relying on network isolation to keep X-Sov-Subject honest.
-	if g.trustUpstreamWired && !g.hasSealVerifier() && !g.hasUpstreamTrust() {
-		g.Log().Warn("gateway: trusting inbound X-Sov-* claims with no SealVerifier/UpstreamTrustPolicy — relying on network isolation to keep identity honest. Add gw.Use(hmacseal.New(...)) (keyed to your mesh secret) to require cryptographic proof on untrusted networks.")
+	if g.trustUpstreamWired && !g.hasSealVerifier() {
+		g.Log().Warn("gateway: trusting inbound X-Sov-* claims with no SealVerifier — identity is only as safe as the network. " +
+			"An upstream-allowlist filter (the upstreams plugin) is NOT cryptographic proof: it matches a client-supplied X-Sov-Upstream header and cannot stop a caller who reaches the pod directly from forging X-Sov-Subject. " +
+			"Add gw.Use(hmacseal.New(...)) keyed to your mesh secret to require cryptographic proof on untrusted networks.")
 	}
 	if err := g.reorderPluginsByDependency(); err != nil {
 		return err
