@@ -372,7 +372,7 @@ func (g *Gateway) callHealthAggregators(ctx context.Context, report *HealthRepor
 // recordDispatchEventWithMode builds + fires a DispatchEvent from the
 // gateway's dispatch path. The outer handler reads resp.Mode to label
 // where the call actually ran.
-func (g *Gateway) recordDispatchEventWithMode(router, method, path string, status int, started time.Time, subject, errorCode, batchID, mode, remoteIP string) {
+func (g *Gateway) recordDispatchEventWithMode(router, method, path string, status int, started time.Time, subject, errorCode, batchID, mode, remoteIP, requestID string) {
 	g.muPlugins.RLock()
 	any := false
 	for _, e := range g.plugins {
@@ -393,6 +393,7 @@ func (g *Gateway) recordDispatchEventWithMode(router, method, path string, statu
 		Duration:  time.Since(started),
 		Subject:   subject,
 		RemoteIP:  remoteIP,
+		RequestID: requestID,
 		ErrorCode: errorCode,
 		BatchID:   batchID,
 		Mode:      mode,

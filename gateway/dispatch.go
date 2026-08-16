@@ -53,7 +53,7 @@ func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 	// specific one for this request (RecordDispatch, e.g. MCP tools/call).
 	if !req.recorded {
 		router, method, _ := rpc.SplitRPCPath(req.Path)
-		g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP)
+		g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP, requestIDOf(req, resp))
 		req.recorded = true
 	}
 	return resp
@@ -65,6 +65,26 @@ func remoteIPOf(req *Request) string {
 		return ""
 	}
 	return req.RemoteIP
+}
+
+// requestIDHeader is the canonical correlation-id header (owned on the wire by
+// the requestid builtin). Kept here so the recorder can stamp the id onto
+// DispatchEvent without importing the plugin.
+const requestIDHeader = "X-Sov-Request-Id"
+
+// requestIDOf returns the correlation id for the event — the id the requestid
+// builtin stamped on the response, falling back to an upstream-supplied inbound
+// one, else empty. Nil-safe.
+func requestIDOf(req *Request, resp *Response) string {
+	if resp != nil {
+		if id := resp.Header.Get(requestIDHeader); id != "" {
+			return id
+		}
+	}
+	if req != nil {
+		return req.Header.Get(requestIDHeader)
+	}
+	return ""
 }
 
 // recordDispatchMiddleware is the OUTERMOST middleware. It exists so a request
@@ -81,7 +101,7 @@ func (g *Gateway) recordDispatchMiddleware() Middleware {
 			resp := next(ctx, req)
 			if resp != nil && !req.recorded {
 				router, method, _ := rpc.SplitRPCPath(req.Path)
-				g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP)
+				g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP, requestIDOf(req, resp))
 				req.recorded = true
 			}
 			return resp
@@ -182,7 +202,7 @@ func (g *Gateway) RecordDispatch(req *Request, router, method, path string, resp
 		// direct /rpc call), not twice (outer /mcp + tool).
 		req.recorded = true
 	}
-	g.recordDispatchEventWithMode(router, method, path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, remoteIPOf(req))
+	g.recordDispatchEventWithMode(router, method, path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, remoteIPOf(req), requestIDOf(req, resp))
 }
 
 // runPluginRoute invokes a plugin route's handler, stamping ModePlugin when the
