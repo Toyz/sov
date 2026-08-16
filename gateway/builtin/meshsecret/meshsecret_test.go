@@ -74,3 +74,25 @@ func TestMarkSeen_SweepEvictsExpired(t *testing.T) {
 		t.Fatal("fresh sig should be retained")
 	}
 }
+
+// Make-before-break rotation: the registry accepts the new key AND the old one,
+// so a pod still signing with the old key joins until it migrates.
+func TestParseHeaders_AcceptsRotatedKey(t *testing.T) {
+	oldKey := []byte("old-secret")
+	newKey := []byte("new-secret")
+	body := []byte(`{"name":"Feed"}`)
+
+	both := New(Config{Secret: newKey, Secrets: [][]byte{oldKey}})
+	if err := both.ParseHeaders(signedReq(oldKey, body, time.Now())); err != nil {
+		t.Fatalf("a register signed with a still-accepted rotated key must pass: %v", err)
+	}
+	if err := both.ParseHeaders(signedReq(newKey, body, time.Now())); err != nil {
+		t.Fatalf("the primary key must pass: %v", err)
+	}
+
+	// Once the old key is dropped, a register signed with it is rejected.
+	newOnly := New(Config{Secret: newKey})
+	if err := newOnly.ParseHeaders(signedReq(oldKey, body, time.Now())); err == nil {
+		t.Fatal("a register signed with a dropped key must be rejected")
+	}
+}

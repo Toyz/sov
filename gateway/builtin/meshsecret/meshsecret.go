@@ -17,16 +17,23 @@ import (
 	"github.com/Toyz/sov/rpc"
 )
 
-// Config configures the meshsecret plugin. Secret is the HMAC key
-// shared between the registry and every joining pod. Empty secret
+// Config configures the meshsecret plugin. Secret is the primary HMAC key
+// shared between the registry and every joining pod; empty (and no Secrets)
 // disables the gate.
 type Config struct {
 	Secret []byte
+	// Secrets are ADDITIONAL keys accepted on verify — the previous key(s)
+	// during a rotation. A register signature passes if it matches Secret OR
+	// any of Secrets, enabling make-before-break rollover: distribute a new
+	// Secret to pods while the registry still accepts the old one here, then
+	// drop the old once every pod has migrated. Pods sign with their single
+	// key, so no pod ever holds two.
+	Secrets [][]byte
 }
 
 // Plugin is the HMAC-gate plugin returned by New.
 type Plugin struct {
-	secret []byte
+	secrets [][]byte
 
 	// seen guards against exact replays inside the skew window. The HMAC
 	// signature is unique per (body, ts), so a byte-identical resend carries
@@ -48,7 +55,16 @@ func New(cfgs ...Config) *Plugin {
 	if len(cfgs) == 1 {
 		cfg = cfgs[0]
 	}
-	return &Plugin{secret: cfg.Secret, seen: map[string]int64{}}
+	var secrets [][]byte
+	if len(cfg.Secret) > 0 {
+		secrets = append(secrets, cfg.Secret)
+	}
+	for _, s := range cfg.Secrets {
+		if len(s) > 0 {
+			secrets = append(secrets, s)
+		}
+	}
+	return &Plugin{secrets: secrets, seen: map[string]int64{}}
 }
 
 // Compile-time proof of the hooks this plugin binds — a signature
@@ -83,14 +99,22 @@ func (p *Plugin) ParseHeaders(req *gateway.Request) *rpc.Error {
 	if req.Path != "/rpc/_register" {
 		return nil
 	}
-	if len(p.secret) == 0 {
+	if len(p.secrets) == 0 {
 		return nil
 	}
 	sig := req.Header.Get(proto.RegisterSigHeader)
 	ts := req.Header.Get(proto.RegisterTsHeader)
 	now := time.Now()
-	if err := proto.Verify(p.secret, sig, ts, req.Body, now); err != nil {
-		return rpc.Unauthorized("_register: %v", err)
+	// Accept a signature made with ANY active key (rotation overlap). Verify's
+	// hmac.Equal is constant-time per candidate.
+	var verr error
+	for _, s := range p.secrets {
+		if verr = proto.Verify(s, sig, ts, req.Body, now); verr == nil {
+			break
+		}
+	}
+	if verr != nil {
+		return rpc.Unauthorized("_register: %v", verr)
 	}
 	if err := p.markSeen(sig, ts, now); err != nil {
 		return rpc.Unauthorized("_register: %v", err)
