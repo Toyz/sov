@@ -35,6 +35,12 @@ examples, not just unit tests.
 - **Load shedding** — `WithMaxInFlight(n)` sheds past N concurrent requests with a
   retryable `503 OVERLOADED`. Adds the previously-missing `WithRemoteBreaker`,
   `WithAuthCacheTTL`, and `WithMaxInFlight` option setters.
+- **Idempotency-aware retries** (`WithRetries`, off by default) — a failed remote
+  dispatch re-resolves onto a different replica with exponential-full-jitter
+  backoff (deadline-capped). A provably-never-executed failure (breaker open /
+  dial refused) retries unconditionally; an ambiguous failure or upstream 5xx
+  retries only under an `Idempotency-Key`, so non-idempotent ops are never
+  silently re-sent.
 - **Per-call deadline budget** (`deadline` builtin; `X-Sov-Deadline` shared across a
   mesh chain), **W3C traceparent** propagation (`tracing` builtin), and
   **Idempotency-Key** replay (`idempotency` builtin) — all with pluggable stores.

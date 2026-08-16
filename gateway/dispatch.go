@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
+	"net"
 	"net/http"
 	"reflect"
 	"runtime/debug"
@@ -442,11 +445,99 @@ func (g *Gateway) CodecFor(req *Request) rpc.Codec {
 	return g.engine.ResolveCodec(codecNameFromContentType(req.Header.Get("Content-Type")))
 }
 
+// remoteOutcome classifies a single remote attempt for the retry policy (W1.4).
+type remoteOutcome int
+
+const (
+	remoteOK            remoteOutcome = iota // got an HTTP response (any status)
+	remoteNeverExecuted                      // provably never reached the app: breaker open, or a dial-phase failure
+	remoteAmbiguous                          // the request may have been sent (timeout, mid-flight reset)
+)
+
+// dispatchRemote proxies to a remote replica, retrying on failure when
+// configured (W1.4, off by default). The loop re-resolves between attempts so
+// each retry lands on a DIFFERENT replica (round-robin; the picker skips open
+// breakers). A never-executed failure (breaker open / dial refused) is always
+// safe to retry; an ambiguous failure (timeout) or an upstream 5xx retries ONLY
+// when the caller asserted idempotency via an Idempotency-Key, so a
+// maybe-executed non-idempotent op is never silently re-sent.
 func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method string, req *Request) *Response {
+	attempts := g.retry.MaxAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
+	idempotent := req.Header.Get("Idempotency-Key") != ""
+	var resp *Response
+	for attempt := 1; ; attempt++ {
+		var outcome remoteOutcome
+		resp, outcome = g.dispatchRemoteOnce(ctx, base, router, method, req)
+		if attempt >= attempts || !retryableOutcome(outcome, resp, idempotent) {
+			return resp
+		}
+		if !g.backoffOrDone(ctx, attempt) {
+			return resp // deadline hit mid-backoff — return what we have
+		}
+		// Re-pick a replica for the next attempt; bail if none remains remote.
+		ep, ok := g.resolver.Resolve(ctx, router)
+		if !ok || ep.Local || ep.Peer != nil || ep.RemoteAddr == "" {
+			return resp
+		}
+		base = ep.RemoteAddr
+	}
+}
+
+// retryableOutcome decides whether a failed attempt should be retried.
+func retryableOutcome(o remoteOutcome, resp *Response, idempotent bool) bool {
+	switch o {
+	case remoteNeverExecuted:
+		return true // request never ran — always safe to try another replica
+	case remoteAmbiguous:
+		return idempotent
+	case remoteOK:
+		if resp != nil && (resp.Status == http.StatusBadGateway ||
+			resp.Status == http.StatusServiceUnavailable ||
+			resp.Status == http.StatusGatewayTimeout) {
+			return idempotent
+		}
+	}
+	return false
+}
+
+// backoffOrDone sleeps an exponential-with-full-jitter backoff before the next
+// attempt, capped by MaxBackoff and never exceeding the ctx deadline. Returns
+// false if the context is done (stop retrying).
+func (g *Gateway) backoffOrDone(ctx context.Context, attempt int) bool {
+	d := g.retry.BaseBackoff << (attempt - 1) // attempt >= 1
+	if d <= 0 || d > g.retry.MaxBackoff {
+		d = g.retry.MaxBackoff
+	}
+	wait := time.Duration(rand.Int64N(int64(d) + 1)) // full jitter in [0, d]
+	if dl, ok := ctx.Deadline(); ok {
+		remaining := time.Until(dl)
+		if remaining <= 0 {
+			return false
+		}
+		if wait > remaining {
+			wait = remaining
+		}
+	}
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// dispatchRemoteOnce performs a SINGLE proxy attempt and classifies the outcome
+// for the retry policy.
+func (g *Gateway) dispatchRemoteOnce(ctx context.Context, base, router, method string, req *Request) (*Response, remoteOutcome) {
 	url := strings.TrimRight(base, "/") + req.Path
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Body))
 	if err != nil {
-		return ErrorResponse(rpc.Internal("proxy build request: %v", err))
+		return ErrorResponse(rpc.Internal("proxy build request: %v", err)), remoteOK
 	}
 	// Forward inbound headers (already X-Sov-* stripped by Server).
 	for k, v := range req.Header {
@@ -470,15 +561,19 @@ func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method strin
 		return ErrorResponse(&rpc.Error{
 			Status: http.StatusServiceUnavailable, Code: "UPSTREAM_CIRCUIT_OPEN",
 			Message: fmt.Sprintf("upstream %s circuit open (failing fast after repeated errors)", base),
-		})
+		}), remoteNeverExecuted
 	}
 	resp, err := g.proxy.Do(hreq)
 	if err != nil {
 		g.breakers.record(base, false)
+		outcome := remoteAmbiguous
+		if neverSent(err) {
+			outcome = remoteNeverExecuted
+		}
 		return ErrorResponse(&rpc.Error{
 			Status: http.StatusBadGateway, Code: "UPSTREAM_UNAVAILABLE",
 			Message: fmt.Sprintf("proxy %s/%s: %v", router, method, err),
-		})
+		}), outcome
 	}
 	// A 5xx from the upstream is an unhealthy signal too (panicking handler,
 	// dependency down, overload) — count it as a breaker failure so an
@@ -496,7 +591,20 @@ func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method strin
 	if resp.Header.Get(IntrospectVisitedHeader) != "" {
 		mode = ModeFederated
 	}
-	return &Response{Status: resp.StatusCode, Header: hdr, Body: body, Mode: mode}
+	return &Response{Status: resp.StatusCode, Header: hdr, Body: body, Mode: mode}, remoteOK
+}
+
+// neverSent reports whether err means the request provably never left this
+// process — a dial-phase failure (connection refused, no route). Such a request
+// definitely did not execute, so retrying another replica is always safe. A
+// post-dial error (timeout, reset mid-flight) is NOT classified here: it is
+// ambiguous and retried only under an idempotency assertion.
+func neverSent(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op == "dial"
+	}
+	return false
 }
 
 // BuildProxyRequest constructs an outbound HTTP request to addr+path

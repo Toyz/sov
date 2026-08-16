@@ -28,6 +28,7 @@ type Gateway struct {
 	serving       atomic.Int32    // serving state (starting|ready|draining) for /rpc/_ready
 	inFlight      atomic.Int64    // requests currently in the dispatch chain (in-flight gauge)
 	maxInFlight   int64           // load-shed cap; 0 = unlimited
+	retry         RetryConfig     // bounded remote-dispatch retry (W1.4); off unless MaxAttempts>1
 	dispatch      Handler         // wrapped chain (middleware → handle)
 
 	// Auth + authz bindings. Both optional. The gateway calls the
@@ -111,6 +112,37 @@ type Options struct {
 	// OVERLOADED instead of being accepted and exhausting goroutines/FDs.
 	// 0 (default) = unlimited.
 	MaxInFlight int
+	// Retry bounds automatic retry of a failed REMOTE dispatch (W1.4). Off by
+	// default; see RetryConfig + WithRetries.
+	Retry RetryConfig
+}
+
+// RetryConfig bounds automatic retry of a failed REMOTE dispatch (W1.4). Retry
+// is OFF by default (MaxAttempts <= 1); enable it with WithRetries. A retry
+// re-resolves onto a DIFFERENT replica (round-robin; open breakers skipped).
+// Only a provably-never-executed failure (breaker open / dial refused) is
+// retried unconditionally; an ambiguous failure (timeout) or an upstream 5xx is
+// retried ONLY when the request carries an Idempotency-Key, so a non-idempotent
+// op is never silently re-sent. Backoff is exponential with full jitter and
+// never sleeps past the request deadline (W1.2).
+type RetryConfig struct {
+	MaxAttempts int           // total attempts including the first; <=1 disables retry
+	BaseBackoff time.Duration // first-retry backoff; default 20ms
+	MaxBackoff  time.Duration // backoff cap; default 1s
+}
+
+// normalizeRetry fills defaults; MaxAttempts<=1 leaves retry disabled.
+func normalizeRetry(c RetryConfig) RetryConfig {
+	if c.MaxAttempts < 1 {
+		c.MaxAttempts = 1
+	}
+	if c.BaseBackoff <= 0 {
+		c.BaseBackoff = 20 * time.Millisecond
+	}
+	if c.MaxBackoff <= 0 {
+		c.MaxBackoff = time.Second
+	}
+	return c
 }
 
 // Middleware wraps the gateway's request handler. Return a non-nil
@@ -186,6 +218,12 @@ func WithMaxInFlight(n int) Option {
 	return func(o *Options) { o.MaxInFlight = n }
 }
 
+// WithRetries enables bounded automatic retry of failed remote dispatches
+// (W1.4). See RetryConfig. cfg.MaxAttempts <= 1 leaves retry off.
+func WithRetries(cfg RetryConfig) Option {
+	return func(o *Options) { o.Retry = cfg }
+}
+
 // New constructs a Gateway. All Options are optional — the bare
 // gateway.New() returns a usable standalone gateway with sensible
 // defaults. The gateway always owns its rpc.Engine internally; reach
@@ -241,6 +279,7 @@ func New(opts ...Option) *Gateway {
 		middlewares:   append([]Middleware{}, o.Middleware...),
 		breakers:      newBreakerManager(o.RemoteBreaker),
 		maxInFlight:   int64(o.MaxInFlight),
+		retry:         normalizeRetry(o.Retry),
 	}
 	g.defaultRecovery = &defaultRecoveryHandler{gw: g}
 	// Route rpc.Engine boot warnings (HELL-281) through the gateway's
