@@ -57,6 +57,11 @@ type Gateway struct {
 	// directly, so they keep working without the public endpoint being open.
 	introspectExposed bool
 
+	// configExposed gates the opt-in /rpc/_config runtime-config dump. OFF by
+	// default — the report is sanitized (no secrets) but still discloses
+	// operational topology, so it is opened only via gw.Use(configdump.New()).
+	configExposed bool
+
 	// muMiddleware guards dynamic Use() appends after construction.
 	muMiddleware sync.Mutex
 	middlewares  []Middleware
