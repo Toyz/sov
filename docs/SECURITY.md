@@ -1,0 +1,100 @@
+# Sov security posture (1.0)
+
+Sov is a protocol-enforced modular monolith: the same router code runs as an
+in-process monolith or a distributed mesh. Its security model follows one rule —
+**verification confers no standing trust**. Every boundary re-checks; defaults
+are closed; a component that cannot prove a claim treats it as absent, not as
+permitted.
+
+This document states what Sov guarantees by default, what it leaves to the
+consumer, and the knobs that move the line.
+
+## Secure-by-default
+
+These hold with no configuration beyond registering the relevant builtin.
+
+- **Inbound identity headers are stripped.** A gateway does not trust
+  `X-Sov-Subject`, `X-Sov-*`, or any identity-claim header from the wire.
+  `NetHTTPOptions.TrustUpstreamClaims` (default `false`) must be set — and
+  should be paired with `hmacseal` — before a downstream pod honors claims
+  injected by an upstream gateway. A public-facing gateway left at the default
+  cannot be told "I am admin" by a header.
+
+- **Client IP is the socket peer, not `X-Forwarded-For`.** `RemoteIP` (stamped
+  into audit events and re-forwarded downstream) comes from the transport peer
+  address. `X-Forwarded-For` is honored only when
+  `NetHTTPOptions.TrustProxyHeaders` is set, which you do only behind a proxy
+  that rewrites the header. Direct callers cannot forge their source IP.
+
+- **Disclosure endpoints are gated on an authed gateway.** The explorer UI
+  (`/rpc/_explorer/`) and the manifest (`/rpc/_manifest`) disclose the full
+  catalog, plugin list, and internal mesh addresses. On a gateway that has an
+  auth binding, anonymous callers get 401; set the plugin's `Public: true` to
+  intentionally open them. A no-auth (local/dev) gateway serves them freely.
+
+- **The registry refuses to boot wide open.** A registry-mode gateway whose
+  `/rpc/_register` has no admission gate (mesh secret, register token, or an
+  `AllowedNames` allowlist) refuses to start. Set
+  `registry.Config.AllowOpenRegister: true` to boot anyway (dev/trusted
+  networks) — it then boots with a loud warning rather than silently accepting
+  any pod.
+
+- **Mesh joins are HMAC-gated and replay-resistant.** With `meshsecret`
+  registered, every `/rpc/_register` POST is HMAC-signed with the shared mesh
+  secret; the registry rejects bad signatures, timestamps outside a ±5 min skew
+  window, and exact replays inside that window (the signature doubles as a
+  nonce). See [meshsecret](../gateway/builtin/meshsecret).
+
+- **A panicking handler cannot crash the process.** Every HTTP surface — the
+  rpc surface, MCP `tools/call`, the batch / batchstream per-entry goroutines,
+  static, explorer, custom surfaces — dispatches through one seam that recovers
+  panics, routes them through the recovery machinery, and returns a clean 500.
+  A single bad request or handler bug degrades to one failed call.
+
+## DoS limits (defaults)
+
+| Limit | Default | Knob |
+|---|---|---|
+| Request body size | 4 MiB | `NetHTTPOptions.MaxBodyBytes` |
+| Total read time (headers + body) | 30 s | `NetHTTPOptions.ReadTimeout` |
+| Batch entries per call | 500 | `batch.Config.MaxBatchSize` / `batchstream.Config.MaxBatchSize` |
+| Concurrent dispatch within a batch | 32 | `batch.Config.MaxConcurrency` / `batchstream.Config.MaxConcurrency` |
+| Registrant heartbeat interval (TTL basis) | clamped to 300 s | — |
+
+`ReadTimeout` closes the slow-body (slowloris) variant that `ReadHeaderTimeout`
+alone leaves open. The batch caps bound the amplification factor of a single
+`/rpc/_batch` request; the heartbeat clamp stops a hostile registrant from
+requesting a near-immortal TTL.
+
+## Consumer responsibilities
+
+Sov deliberately does not ship these. They are edge/deployment concerns, and a
+built-in would either be wrong for most deployments or duplicate infrastructure
+you already run. Each has a seam.
+
+- **Rate limiting / quota.** Enforce at your L7 proxy, API gateway, or load
+  balancer — or as a Sov plugin: a `HeaderParser` (per-request, pre-dispatch)
+  or `DispatchHook` plugin can count and reject by subject or `RemoteIP`. Sov
+  gives you the authenticated subject and the trustworthy client IP to key on;
+  it does not impose a policy.
+
+- **TLS termination.** Terminate at the proxy/ingress, or supply your own
+  `*http.Server` via `NetHTTPOptions.HTTPServer` with `TLSConfig` set. Sov does
+  not manage certificates.
+
+- **Network isolation.** `upstreams` is a coarse network-topology filter, **not
+  authentication** — `X-Sov-Upstream` is a plain client header. On an untrusted
+  network, cryptographic upstream trust means `hmacseal` keyed to the mesh
+  secret, not the allowlist alone.
+
+- **Secret management.** The mesh secret, signing keys, and register tokens are
+  supplied by you (env, file, secret manager). Sov holds them in memory for the
+  process lifetime and never persists them.
+
+- **The data store.** Business persistence is not in Sov's request path at all;
+  routers own their storage.
+
+## Reporting
+
+Pre-1.0 project; report suspected vulnerabilities privately to the maintainer
+rather than in a public issue.
