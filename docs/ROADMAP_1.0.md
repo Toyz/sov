@@ -138,7 +138,7 @@ policy. Verify with live examples, not just `go test`.
   is unfuzzed. (DX P1-5)
 - [x] **W5.6 rpctest in chirp handlers** `[P1][S]` — the flagship test-ergonomics package is in
   no example; chirp handlers have no unit tests. (DX P1-6)
-- [ ] **W5.7 `sov gen mock`** `[P1][M-L]` — DECISION NEEDED: emit a contract-verifiable mock pod
+- [x] **W5.7 `sov gen mock`** `[P1][M-L]` — DECISION NEEDED: emit a contract-verifiable mock pod
   from a catalog (the "free mock" thesis is aspirational today). (DX P1-7)
 - [x] **W5.8 Wire-compat guard** `[P1][M]` — `sov catalog snapshot` + `diff` (golden catalog,
   CI fails on breaking delta) reusing `ShapeHash`. (DX P1-8)
