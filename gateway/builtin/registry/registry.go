@@ -16,12 +16,18 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/Toyz/sov/gateway"
 	"github.com/Toyz/sov/rpc"
 )
+
+// maxHeartbeatSeconds clamps a registrant-supplied HeartbeatInterval so an
+// attacker can't pin a near-immortal registration (TTL = heartbeat × 3) and
+// exhaust the registry map.
+const maxHeartbeatSeconds = 300
 
 // Config configures the registry plugin. Zero values fall back to
 // 2s/1s probe timeouts. AllowedNames, when non-empty, restricts
@@ -40,6 +46,15 @@ type Config struct {
 	// public /health route and federation/health/introspect aggregation are
 	// unaffected. Leave false for Hybrid/Registry shapes that accept joins.
 	DisableRegister bool
+	// AllowOpenRegister permits BOOTING with an ungated /rpc/_register — no
+	// AllowedNames and no meshsecret/registertoken join-gate plugin. Default
+	// false: the gateway REFUSES to boot when _register is open, because an
+	// open register endpoint is an SSRF + credential-forwarding + traffic-
+	// hijack vector (any reachable actor self-registers a service address the
+	// gateway then health/introspect-probes and proxies routed traffic to,
+	// forwarding the caller's Authorization header). Set true only on a
+	// trusted, network-isolated deployment where you accept that risk.
+	AllowOpenRegister bool
 }
 
 // ttlMultiplier sets a registration's TTL to heartbeat × 3, so a pod can
@@ -53,6 +68,7 @@ type Plugin struct {
 	healthProbeTimeout     time.Duration
 	allowed                map[string]struct{}
 	disableRegister        bool
+	allowOpenRegister      bool
 }
 
 // New returns the registry plugin from cfg.
@@ -74,6 +90,7 @@ func New(cfg Config) *Plugin {
 		healthProbeTimeout:     cfg.HealthProbeTimeout,
 		allowed:                allow,
 		disableRegister:        cfg.DisableRegister,
+		allowOpenRegister:      cfg.AllowOpenRegister,
 	}
 }
 
@@ -165,9 +182,14 @@ func (p *Plugin) ValidateBoot(g *gateway.Gateway) error {
 		return nil
 	}
 	if !p.registerGated(g) {
-		g.Log().Warn("registry: /rpc/_register is OPEN — any reachable actor can self-register a service and receive routed traffic. " +
-			"Set a join gate before exposing this gateway on an untrusted network: registertoken.Config{Token:...}, " +
-			"meshsecret.Config{Secret:...}, or Registry.AllowedNames.")
+		if !p.allowOpenRegister {
+			return gateway.HaltErr(errors.New("registry: /rpc/_register is OPEN (no join gate) — refusing to boot. " +
+				"An open register endpoint is an SSRF + credential-forwarding + traffic-hijack vector. Set a join gate " +
+				"(registertoken.Config{Token:...}, meshsecret.Config{Secret:...}, or Registry.AllowedNames), or set " +
+				"Registry.AllowOpenRegister=true to accept the risk on a trusted, isolated network."))
+		}
+		g.Log().Warn("registry: /rpc/_register is OPEN and AllowOpenRegister=true — any reachable actor can self-register a " +
+			"service and receive routed traffic. Ensure this gateway is on a trusted, isolated network.")
 	}
 	return nil
 }
@@ -222,6 +244,9 @@ func (p *Plugin) serveRegister(ctx context.Context, req *gateway.Request) *gatew
 	hb := rr.HeartbeatInterval
 	if hb <= 0 {
 		hb = 10
+	}
+	if hb > maxHeartbeatSeconds {
+		hb = maxHeartbeatSeconds // clamp a hostile near-immortal TTL
 	}
 	ttl := time.Duration(hb*ttlMultiplier) * time.Second
 

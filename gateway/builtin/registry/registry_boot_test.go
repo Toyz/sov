@@ -20,7 +20,7 @@ func (r *recLogger) Info(string, ...any)            {}
 func (r *recLogger) Warn(msg string, _ ...any)      { r.warns = append(r.warns, msg) }
 func (r *recLogger) Error(string, ...any)           {}
 
-func bootWarns(t *testing.T, p *registry.Plugin, configure func(*gateway.Gateway)) []string {
+func bootResult(t *testing.T, p *registry.Plugin, configure func(*gateway.Gateway)) ([]string, error) {
 	t.Helper()
 	gw := gateway.New()
 	rec := &recLogger{}
@@ -28,34 +28,40 @@ func bootWarns(t *testing.T, p *registry.Plugin, configure func(*gateway.Gateway
 	if configure != nil {
 		configure(gw)
 	}
-	if err := p.ValidateBoot(gw); err != nil {
-		t.Fatalf("ValidateBoot: %v", err)
-	}
-	return rec.warns
+	err := p.ValidateBoot(gw)
+	return rec.warns, err
 }
 
-func TestRegistry_BootWarnsWhenRegisterOpen(t *testing.T) {
-	// No gate at all → must warn.
-	if w := bootWarns(t, registry.New(registry.Config{}), nil); len(w) == 0 {
-		t.Error("open _register (no gate) produced no boot warning — should yell")
+func TestRegistry_RefusesOpenBoot(t *testing.T) {
+	// No gate at all → REFUSE to boot (not just a warning): open _register is an
+	// SSRF + credential-forwarding + traffic-hijack vector.
+	if _, err := bootResult(t, registry.New(registry.Config{}), nil); err == nil {
+		t.Error("open _register (no gate) must refuse to boot, got nil error")
 	}
 
-	// registertoken sibling present → silent.
-	if w := bootWarns(t, registry.New(registry.Config{}), func(gw *gateway.Gateway) {
-		gw.MustUse(registertoken.New(registertoken.Config{Token: []byte("t")}))
-	}); len(w) != 0 {
-		t.Errorf("registertoken gate present but warned: %v", w)
+	// AllowOpenRegister → boots, but still warns loudly.
+	if w, err := bootResult(t, registry.New(registry.Config{AllowOpenRegister: true}), nil); err != nil {
+		t.Errorf("AllowOpenRegister must boot, got: %v", err)
+	} else if len(w) == 0 {
+		t.Error("AllowOpenRegister should still warn that _register is open")
 	}
 
-	// meshsecret sibling present → silent.
-	if w := bootWarns(t, registry.New(registry.Config{}), func(gw *gateway.Gateway) {
-		gw.MustUse(meshsecret.New(meshsecret.Config{Secret: []byte("s")}))
-	}); len(w) != 0 {
-		t.Errorf("meshsecret gate present but warned: %v", w)
+	// A join-gate plugin lets it boot silently.
+	for name, configure := range map[string]func(*gateway.Gateway){
+		"registertoken": func(gw *gateway.Gateway) {
+			gw.MustUse(registertoken.New(registertoken.Config{Token: []byte("t")}))
+		},
+		"meshsecret": func(gw *gateway.Gateway) {
+			gw.MustUse(meshsecret.New(meshsecret.Config{Secret: []byte("s")}))
+		},
+	} {
+		if w, err := bootResult(t, registry.New(registry.Config{}), configure); err != nil || len(w) != 0 {
+			t.Errorf("%s gate: must boot silently, err=%v warns=%v", name, err, w)
+		}
 	}
 
-	// AllowedNames allowlist → silent.
-	if w := bootWarns(t, registry.New(registry.Config{AllowedNames: []string{"Chirp"}}), nil); len(w) != 0 {
-		t.Errorf("AllowedNames gate present but warned: %v", w)
+	// AllowedNames allowlist → boots silently.
+	if w, err := bootResult(t, registry.New(registry.Config{AllowedNames: []string{"Chirp"}}), nil); err != nil || len(w) != 0 {
+		t.Errorf("AllowedNames gate: must boot silently, err=%v warns=%v", err, w)
 	}
 }
