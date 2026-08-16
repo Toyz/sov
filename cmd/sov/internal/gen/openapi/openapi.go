@@ -180,8 +180,21 @@ func errorResponse() map[string]any {
 						"error": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
-								"code":    map[string]any{"type": "string"},
-								"message": map[string]any{"type": "string"},
+								"code":        map[string]any{"type": "string"},
+								"message":     map[string]any{"type": "string"},
+								"retryable":   map[string]any{"type": "boolean"},
+								"retry_after": map[string]any{"type": "integer"},
+								"details": map[string]any{
+									"type": "array",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"field":   map[string]any{"type": "string"},
+											"code":    map[string]any{"type": "string"},
+											"message": map[string]any{"type": "string"},
+										},
+									},
+								},
 							},
 						},
 					},
