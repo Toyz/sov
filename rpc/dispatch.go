@@ -15,7 +15,7 @@ import (
 // take no params can be invoked with no body.
 func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (status int, respBody []byte) {
 	codec := e.codecForContext(ctx)
-	entry, ok := e.Lookup(router, method)
+	entry, ok := e.lookup(router, method)
 	if !ok {
 		if !e.HasRouter(router) {
 			return encodeErrorWith(codec, NotFound("router %q not found", router))

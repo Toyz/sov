@@ -70,7 +70,7 @@ func (e *Engine) Describe() []RouterDescriptor {
 			// a header-only method emits params: void / a no-arg call even
 			// though HasParams stays true. See docs/WIRE_CONTRACT.md.
 			md.HasParams = len(md.Params) > 0
-			md.RequestTypeScript, md.ResponseTypeScript = TSPreviewForMethod(ent)
+			md.RequestTypeScript, md.ResponseTypeScript = tsPreviewForMethod(ent)
 			// Reflect the response type into the catalog too, so the
 			// type ownership convention (owner = the service that RETURNS
 			// a type) has a signal. Named struct results (and their

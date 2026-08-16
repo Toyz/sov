@@ -3,7 +3,7 @@
 //
 //   - Inline: `{ field?: string; other: number[] }` — one-liner, what
 //     the Explorer UI renders next to each method (and what
-//     rpc.TSPreviewForMethod consumed for years before this split).
+//     tsPreviewForMethod consumed for years before this split).
 //   - Decl:   `export interface Name {\n  field?: string;\n}` — full
 //     `.d.ts` form, what the sovgen CLI emits per named type.
 //   - Collect: walk a root type, emit one TypeDecl per named struct

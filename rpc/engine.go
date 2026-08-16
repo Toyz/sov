@@ -673,7 +673,7 @@ func buildEntry(typeName string, rv reflect.Value, m reflect.Method) *methodEntr
 }
 
 // Lookup returns the method entry for router/method, or false.
-func (e *Engine) Lookup(router, method string) (*methodEntry, bool) {
+func (e *Engine) lookup(router, method string) (*methodEntry, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	methods, ok := e.routers[router]
