@@ -15,7 +15,7 @@ policy. Verify with live examples, not just `go test`.
   currently invisible to audit+metrics — they fire before `handle()`). Fixes the false
   SECURITY.md "RemoteIP stamped into audit events" claim. Unblocks W3.3 accesslog + W3.2
   tracing correlation. (security P0-1, obs #3/#6)
-- [ ] **W0.2 Cross-hop header contract** `[P0][M]` — one inbound-parse + outbound-inject
+- [x] **W0.2 Cross-hop header contract** `[P0][M]` — one inbound-parse + outbound-inject
   point in `dispatchRemote`/`BuildProxyRequest` for `X-Sov-Deadline`, `traceparent`,
   `Idempotency-Key`. Shared plumbing for W1.2 + W3.2 + W2.5. (resilience #2, obs #2, protocol #5)
 
@@ -23,7 +23,7 @@ policy. Verify with live examples, not just `go test`.
 - [ ] **W1.1 Multi-endpoint replicas + `EndpointPicker`** `[P0][L]` — KEYSTONE. Store becomes
   `[]RegisterEntry` per name; a 2nd address = replica, not 409. Default round-robin picker,
   breaker-aware (skip open). Unblocks retries/failover/outlier-ejection. (resilience #1)
-- [ ] **W1.2 Per-call deadline budget** `[P0][M]` — derive `context.WithTimeout` from a
+- [x] **W1.2 Per-call deadline budget** `[P0][M]` — derive `context.WithTimeout` from a
   configurable default + inbound `X-Sov-Deadline`; stamp remaining budget on every hop so a
   chain shares one deadline. (resilience #2)
 - [x] **W1.3 Breaker trips on 5xx** `[P1][S]` — currently only transport errors count; an
@@ -31,7 +31,7 @@ policy. Verify with live examples, not just `go test`.
 - [ ] **W1.4 Idempotency-aware retries** `[P1][M]` — bounded retry, exp backoff + full jitter,
   gated by an idempotency marker/key, re-pick a replica (W1.1), honor the budget (W1.2),
   retry budget to prevent storms. (resilience #3, #8)
-- [ ] **W1.5 Load shedding + transport tuning** `[P1][S-M]` — gateway/per-upstream in-flight
+- [x] **W1.5 Load shedding + transport tuning** `[P1][S-M]` — gateway/per-upstream in-flight
   semaphore → fast `503 OVERLOADED`; tuned `http.Transport` (MaxConnsPerHost, idle reuse).
   (resilience #5)
 - [ ] **W1.6 Outlier ejection / hedging** `[P2][M]` — natural follow-on to W1.1+W1.3.
