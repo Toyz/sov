@@ -67,7 +67,7 @@ policy. Verify with live examples, not just `go test`.
   `build_info` gauge. (obs #5)
 - [x] **W3.6 metric gaps** `[P1][S-M]` — in-flight gauge, `sov_upstream_breaker_state` gauge,
   go-runtime metrics. (obs #6)
-- [ ] **W3.7 runtime config dump** `[P2][S]` — opt-in `/rpc/_config` (sanitized). (obs #7)
+- [x] **W3.7 runtime config dump** `[P2][S]` — opt-in `/rpc/_config` (sanitized). (obs #7)
 
 ## Wave 4 — security depth
 - [x] **W4.1 Token cache TTL + revocation seam** `[P0][M]` — cap verify-cache lifetime
