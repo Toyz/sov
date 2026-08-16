@@ -44,14 +44,21 @@ type Config struct {
 	Path       string // endpoint path; default /mcp
 	ServerName string // reported in serverInfo.name; default "sov"
 	Version    string // reported in serverInfo.version
+	// RequireAuthForList gates tools/list behind authentication on an authed
+	// gateway. Default false: tools/list is open (parity with an anonymous
+	// MCP client discovering the toolset). Set true so an anonymous caller
+	// cannot enumerate the full method + declared-perm catalog for recon —
+	// tools/call is always gated regardless.
+	RequireAuthForList bool
 }
 
 // Plugin is the MCP route owner returned by New.
 type Plugin struct {
-	gw      *gateway.Gateway
-	path    string
-	name    string
-	version string
+	gw                 *gateway.Gateway
+	path               string
+	name               string
+	version            string
+	requireAuthForList bool
 }
 
 // Compile-time proof of the hooks this plugin binds.
@@ -73,7 +80,7 @@ func New(cfg ...Config) *Plugin {
 	if len(cfg) == 1 {
 		c = cfg[0]
 	}
-	p := &Plugin{path: c.Path, name: c.ServerName, version: c.Version}
+	p := &Plugin{path: c.Path, name: c.ServerName, version: c.Version, requireAuthForList: c.RequireAuthForList}
 	if p.path == "" {
 		p.path = defaultPath
 	}
@@ -129,6 +136,11 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 			"serverInfo":      map[string]any{"name": p.name, "version": p.version},
 		}))
 	case "tools/list":
+		// JSON-RPC error (HTTP 200) rather than 401 — MCP clients speak
+		// JSON-RPC, and errors ride in the envelope like every other failure.
+		if p.requireAuthForList && p.gw.AuthBinding() != nil && req.User == nil {
+			return jsonRPC(http.StatusOK, errBody(rq.ID, -32001, "authentication required for tools/list"))
+		}
 		return jsonRPC(http.StatusOK, okBody(rq.ID, map[string]any{"tools": p.listTools(ctx)}))
 	case "tools/call":
 		res, jerr := p.callTool(ctx, req, rq.Params)
