@@ -81,6 +81,10 @@ type MethodDescriptor struct {
 	// Surfaced to introspect / OpenAPI / codegen. DeprecatedReason is optional.
 	Deprecated       bool   `json:"deprecated,omitempty"`
 	DeprecatedReason string `json:"deprecatedReason,omitempty"`
+	// Streaming marks a server-streaming method (result rpc.Stream[T], W2.7):
+	// it returns an NDJSON stream, not a single JSON result. ResponseTypeScript
+	// describes the per-item type T. Codegen emits an async-iterator consumer.
+	Streaming bool `json:"streaming,omitempty"`
 	// Internal marks a SOFT-hidden method: omitted from the default
 	// introspect report, but present (with this flag set) in the full
 	// payload served under the X-Sov-Introspect-Internal header so the

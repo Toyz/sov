@@ -38,6 +38,7 @@ func (e *Engine) Describe() []RouterDescriptor {
 				Perm:             ent.perm,
 				Deprecated:       ent.deprecated,
 				DeprecatedReason: ent.deprecatedReason,
+				Streaming:        ent.streaming,
 			}
 			// Visibility: marker-method (router-wide) OR sov sentinel
 			// (per-method) declarations both feed the flags; hard wins.

@@ -352,6 +352,7 @@ type methodEntry struct {
 	method     reflect.Method
 	router     reflect.Value
 	hasParams  bool
+	streaming  bool         // result is rpc.Stream[T] — dispatch yields NDJSON (W2.7)
 	paramType  reflect.Type // value type (not pointer) of the params struct, if any
 	resultType reflect.Type // value type of the non-error return, if any
 	goName     string       // Go method name, e.g. "Create"
@@ -674,6 +675,17 @@ func buildEntry(typeName string, rv reflect.Value, m reflect.Method) *methodEntr
 	}
 	if numOut == 2 {
 		entry.resultType = mt.Out(0)
+		// A method returning rpc.Stream[T] server-streams: the gateway drains it
+		// as NDJSON rather than buffering a single JSON result (W2.7). Collapse
+		// resultType to the streamed element T so describe/introspect/OpenAPI/
+		// codegen present the item type, not the Stream wrapper; dispatch keys
+		// off entry.streaming, not resultType.
+		if entry.resultType.Implements(streamProducerType) {
+			entry.streaming = true
+			if elem, ok := streamElem(entry.resultType); ok {
+				entry.resultType = elem
+			}
+		}
 	}
 	return entry
 }

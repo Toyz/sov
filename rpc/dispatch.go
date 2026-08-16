@@ -36,18 +36,41 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 		return entry.invoke(ctx, body)
 	}
 
+	results, st, b, ok := e.invokeMethod(ctx, entry, router, method, body, codec)
+	if !ok {
+		return st, b
+	}
+	var data any
+	if len(results) == 2 {
+		data = results[0].Interface()
+	}
+	body2, mErr := codec.EncodeResult(data)
+	if mErr != nil {
+		return encodeErrorWith(codec, Internal("encode result: %v", mErr))
+	}
+	return 200, body2
+}
+
+// invokeMethod decodes params, runs the resource-scoped authz hook, and calls
+// the reflectively-registered handler. On any failure it returns a buffered
+// (errStatus, errBody) with ok=false; on success it returns the raw reflect
+// results with ok=true. Shared by Dispatch (buffered) and DispatchStream (NDJSON)
+// so both paths bind + authorize identically. Not used by the typed fast path.
+func (e *Engine) invokeMethod(ctx *Context, entry *methodEntry, router, method string, body []byte, codec Codec) (results []reflect.Value, errStatus int, errBody []byte, ok bool) {
 	args := []reflect.Value{entry.router, reflect.ValueOf(ctx)}
 	var paramPtr any
 	if entry.hasParams {
 		ptr := reflect.New(entry.paramType)
 		if derr := codec.DecodeParams(body, ptr.Interface(), entry.fieldMap); derr != nil {
-			return encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
+			st, b := encodeErrorWith(codec, asRPCError(derr, BadRequest("%v", derr)))
+			return nil, st, b, false
 		}
 		// Header-sourced fields bind AFTER the codec decodes the body (they
 		// are not body fields). No-op unless the params struct has header=
 		// fields.
 		if herr := bindHeaderFields(ptr, entry.fieldMap, ctx); herr != nil {
-			return encodeErrorWith(codec, herr)
+			st, b := encodeErrorWith(codec, herr)
+			return nil, st, b, false
 		}
 		args = append(args, ptr)
 		paramPtr = ptr.Interface()
@@ -58,27 +81,57 @@ func (e *Engine) Dispatch(ctx *Context, router, method string, body []byte) (sta
 	// before the handler runs. Deny surfaces verbatim; the handler is skipped.
 	if ma := e.authorizerFor(router); ma != nil {
 		if err := ma.AuthorizeMethod(ctx, method, paramPtr); err != nil {
-			return encodeErrorWith(codec, asRPCError(err, Internal("authorization failed")))
+			st, b := encodeErrorWith(codec, asRPCError(err, Internal("authorization failed")))
+			return nil, st, b, false
 		}
 	}
 
-	results := entry.method.Func.Call(args)
-
+	results = entry.method.Func.Call(args)
 	errVal := results[len(results)-1]
 	if !errVal.IsNil() {
 		callErr := errVal.Interface().(error)
-		return encodeErrorWith(codec, asRPCError(callErr, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
+		st, b := encodeErrorWith(codec, asRPCError(callErr, &Error{Status: 500, Code: "INTERNAL", Message: "internal server error"}))
+		return nil, st, b, false
 	}
+	return results, 0, nil, true
+}
 
-	var data any
-	if len(results) == 2 {
-		data = results[0].Interface()
+// IsStreaming reports whether router/method is a server-streaming method (its
+// result is rpc.Stream[T]). The gateway checks this to route to DispatchStream +
+// NDJSON instead of the buffered Dispatch.
+func (e *Engine) IsStreaming(router, method string) bool {
+	entry, ok := e.lookup(router, method)
+	return ok && entry.streaming
+}
+
+// DispatchStream runs a server-streaming method (W2.7). It binds + authorizes
+// exactly like Dispatch, then:
+//
+//   - on any pre-stream failure (not found, not streaming, bad params, authz
+//     denial, or the handler returning a non-nil error) returns a nil producer
+//     plus a buffered (status, body) — write it as a normal response; nothing
+//     has streamed yet.
+//   - on success returns the StreamProducer (status 0, nil body); drain it as
+//     NDJSON with a 200.
+func (e *Engine) DispatchStream(ctx *Context, router, method string, body []byte) (producer StreamProducer, status int, respBody []byte) {
+	codec := e.codecForContext(ctx)
+	entry, ok := e.lookup(router, method)
+	if !ok || !entry.streaming {
+		// Not a streaming method: fall back to buffered semantics so the caller
+		// still gets a coherent not-found / wrong-shape response.
+		st, b := e.Dispatch(ctx, router, method, body)
+		return nil, st, b
 	}
-	body2, mErr := codec.EncodeResult(data)
-	if mErr != nil {
-		return encodeErrorWith(codec, Internal("encode result: %v", mErr))
+	results, st, b, ok := e.invokeMethod(ctx, entry, router, method, body, codec)
+	if !ok {
+		return nil, st, b
 	}
-	return 200, body2
+	sp, _ := results[0].Interface().(StreamProducer)
+	if sp == nil {
+		st, b := encodeErrorWith(codec, Internal("streaming method %q returned a nil stream", method))
+		return nil, st, b
+	}
+	return sp, 0, nil
 }
 
 // bindParams decodes raw into the destination struct value, picking the

@@ -425,6 +425,21 @@ func (g *Gateway) dispatchLocal(ctx context.Context, router, method string, req 
 	// outbound HTTP headers (request-id, trace-id, tenant). Symmetric
 	// to HeaderInjector for the local path.
 	g.callContextContributors(rc, req)
+	// Server-streaming method (W2.7): drain rpc.Stream[T] as NDJSON through
+	// Response.Stream instead of buffering one JSON result. A pre-stream failure
+	// (bad params, authz denial, handler error) comes back buffered.
+	if g.engine.IsStreaming(router, method) {
+		producer, st, b := g.engine.DispatchStream(rc, router, method, req.Body)
+		if producer == nil {
+			return &Response{Status: st, Body: b, Mode: ModeLocal}
+		}
+		return &Response{
+			Status: 200,
+			Header: Header{"Content-Type": ndjsonContentType},
+			Stream: ndjsonStream(producer),
+			Mode:   ModeLocal,
+		}
+	}
 	status, body := g.engine.Dispatch(rc, router, method, req.Body)
 	resp := &Response{Status: status, Body: body, Mode: ModeLocal}
 	// Reflect the negotiated codec on the response so the caller decodes the
@@ -580,8 +595,6 @@ func (g *Gateway) dispatchRemoteOnce(ctx context.Context, base, router, method s
 	// up-but-broken pod trips the circuit, not just an unreachable one. 4xx is
 	// the caller's fault, not the upstream's health, so it counts as success.
 	g.breakers.record(base, resp.StatusCode < 500)
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
 
 	hdr := Header{}
 	for k, v := range resp.Header {
@@ -591,6 +604,17 @@ func (g *Gateway) dispatchRemoteOnce(ctx context.Context, base, router, method s
 	if resp.Header.Get(IntrospectVisitedHeader) != "" {
 		mode = ModeFederated
 	}
+	// Stream-through: when the upstream emits NDJSON, hand its body straight to
+	// Response.Stream instead of buffering, so a streaming method stays streaming
+	// across the whole mesh chain (W2.7). The adapter closes the body when the
+	// response is done, so we must NOT close it here. This is a clean 200 (a
+	// retryable outcome would already have returned above), so the stream is
+	// never fed into a retry.
+	if isNDJSON(hdr.Get("Content-Type")) {
+		return &Response{Status: resp.StatusCode, Header: hdr, Stream: resp.Body, Mode: mode}, remoteOK
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
 	return &Response{Status: resp.StatusCode, Header: hdr, Body: body, Mode: mode}, remoteOK
 }
 
