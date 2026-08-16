@@ -58,7 +58,7 @@ policy. Verify with live examples, not just `go test`.
 ## Wave 3 — observability / operability
 - [x] **W3.1 Readiness vs liveness** `[P0][M]` — serving-state atomic (starting→ready→draining);
   `/rpc/_ready` 503 until ready + on drain; `ReadinessContributor` hook. (obs #1)
-- [ ] **W3.2 W3C traceparent builtin** `[P0-P1][M-L]` — parse/mint child span per hop
+- [x] **W3.2 W3C traceparent builtin** `[P0-P1][M-L]` — parse/mint child span per hop
   (`requestid` is the template); set event trace fields (W0.1). (obs #2)
 - [x] **W3.3 accesslog builtin** `[P0][S-M]` — one structured line per DispatchEvent with
   request-id; nothing logs on the dispatch path today. (obs #3)
