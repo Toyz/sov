@@ -25,10 +25,15 @@ import (
 // the gate (register stays open).
 type Config struct {
 	Token []byte
+	// Tokens are ADDITIONAL accepted join tokens — the previous token(s) during
+	// a rotation. A pod passes if its token matches Token OR any of Tokens,
+	// enabling make-before-break rollover: issue a new Token while the registry
+	// still accepts the old one, then drop the old once every pod has migrated.
+	Tokens [][]byte
 }
 
 // Plugin is the token-gate plugin returned by New.
-type Plugin struct{ token []byte }
+type Plugin struct{ tokens [][]byte }
 
 // New returns the registertoken plugin from cfg.
 func New(cfgs ...Config) *Plugin {
@@ -39,7 +44,16 @@ func New(cfgs ...Config) *Plugin {
 	if len(cfgs) == 1 {
 		cfg = cfgs[0]
 	}
-	return &Plugin{token: cfg.Token}
+	var tokens [][]byte
+	if len(cfg.Token) > 0 {
+		tokens = append(tokens, cfg.Token)
+	}
+	for _, t := range cfg.Tokens {
+		if len(t) > 0 {
+			tokens = append(tokens, t)
+		}
+	}
+	return &Plugin{tokens: tokens}
 }
 
 // Compile-time proof of the hooks this plugin binds — a signature
@@ -72,12 +86,14 @@ func (p *Plugin) ParseHeaders(req *gateway.Request) *rpc.Error {
 	if req.Path != "/rpc/_register" {
 		return nil
 	}
-	if len(p.token) == 0 {
+	if len(p.tokens) == 0 {
 		return nil
 	}
 	presented := []byte(req.Header.Get(proto.RegisterTokenHeader))
-	if !proto.Verify(p.token, presented) {
-		return rpc.Unauthorized("_register: missing or invalid %s", proto.RegisterTokenHeader)
+	for _, tok := range p.tokens {
+		if proto.Verify(tok, presented) {
+			return nil
+		}
 	}
-	return nil
+	return rpc.Unauthorized("_register: missing or invalid %s", proto.RegisterTokenHeader)
 }
