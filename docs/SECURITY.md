@@ -72,11 +72,14 @@ Sov deliberately does not ship these. They are edge/deployment concerns, and a
 built-in would either be wrong for most deployments or duplicate infrastructure
 you already run. Each has a seam.
 
-- **Rate limiting / quota.** Enforce at your L7 proxy, API gateway, or load
-  balancer — or as a Sov plugin: a `HeaderParser` (per-request, pre-dispatch)
-  or `DispatchHook` plugin can count and reject by subject or `RemoteIP`. Sov
-  gives you the authenticated subject and the trustworthy client IP to key on;
-  it does not impose a policy.
+- **Rate limiting / quota.** No limiter runs by default — rate policy is a
+  deployment concern. Enforce at your L7 proxy, API gateway, or load balancer,
+  or register the optional `ratelimit` builtin (token bucket, keyed by subject
+  then source IP; `gw.Use(ratelimit.New(ratelimit.Config{RequestsPerSecond: 20,
+  Burst: 40}))`). It runs on the `HeaderParser` seam after bearer resolution, so
+  it is a quota limiter, not an auth-brute-force shield — keep that at the edge.
+  Any custom policy plugs into the same seam: a `HeaderParser` or `DispatchHook`
+  plugin can count and reject by the subject and client IP Sov hands it.
 
 - **TLS termination.** Terminate at the proxy/ingress, or supply your own
   `*http.Server` via `NetHTTPOptions.HTTPServer` with `TLSConfig` set. Sov does
