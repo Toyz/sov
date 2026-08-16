@@ -75,7 +75,7 @@ policy. Verify with live examples, not just `go test`.
 - [x] **W1.5 Load shedding + transport tuning** `[P1][S-M]` — gateway/per-upstream in-flight
   semaphore → fast `503 OVERLOADED`; tuned `http.Transport` (MaxConnsPerHost, idle reuse).
   (resilience #5)
-- [ ] **W1.6 Outlier ejection / hedging** `[P2][M]` — natural follow-on to W1.1+W1.3.
+- [x] **W1.6 Outlier ejection / hedging** `[P2][M]` — natural follow-on to W1.1+W1.3.
 
 ## Wave 2 — schema vocabulary / data-model completeness
 - [x] **W2.1 Field validation constraints** `[P0][M]` — `min/max/minlen/maxlen/pattern/enum`
