@@ -28,8 +28,9 @@ examples, not just unit tests.
 - **build-info** on `/rpc/_manifest`; **RemoteIP** + **RequestID** on `DispatchEvent`.
 - **OpenAPI 3.0** generator (`sov gen openapi`); **`sov catalog` snapshot/diff**
   backward-compat guard.
-- **Request.RawQuery**; MCP `tools/list` auth gate; scaffold ships tests + CI +
-  Dockerfiles.
+- **Request.RawQuery**; **Request.Host** (net/http lifts Host out of the header
+  map, so it was invisible to plugins — now first-class for vhost/tenant routing
+  and audit); MCP `tools/list` auth gate; scaffold ships tests + CI + Dockerfiles.
 - Docs: `SECURITY.md`, `VERSIONING.md`, `ROADMAP_1.0.md`.
 - **Multi-endpoint replicas** — a second pod registering an existing service name
   is now a load-balanced **replica** (default round-robin, breaker-aware — an open

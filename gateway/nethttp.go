@@ -198,6 +198,7 @@ func (s *NetHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
 		Header:   hdr,
 		Body:     body,
 		RemoteIP: remoteIPFromHTTP(r, s.opts.TrustProxyHeaders),
+		Host:     r.Host,
 	}
 
 	resp := s.handler(r.Context(), req)

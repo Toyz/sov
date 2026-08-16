@@ -48,6 +48,12 @@ type Request struct {
 	// RemoteIP is the caller's source IP. Server picks it from
 	// X-Forwarded-For or the transport-level remote address.
 	RemoteIP string
+	// Host is the inbound request's Host (net/http lifts Host OUT of the header
+	// map into http.Request.Host, so it is otherwise invisible to a plugin
+	// reading req.Header). First-class so vhost/tenant routing, host-based
+	// policy, and audit can read it. Empty for in-process dispatched
+	// sub-requests (MCP, /rpc surfaces, batch), which carry no transport Host.
+	Host string
 	// RawQuery is the URL query string without the leading '?', e.g.
 	// "seconds=10". Empty for most business calls — the /rpc codec reads args
 	// from the body, not the query. Surfaced so a RouteHandler plugin (pprof,
