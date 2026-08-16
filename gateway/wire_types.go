@@ -35,6 +35,13 @@ type RegisterRequest struct {
 	// at Address. Name in this mode is a label, not a wire name.
 	Federate bool     `json:"federate,omitempty"`
 	Services []string `json:"services,omitempty"`
+	// Deregister, when true, withdraws this pod's services from the registry
+	// (route removal) instead of registering. Sent best-effort on graceful
+	// shutdown so a dead pod's routes drop immediately instead of lingering
+	// until the heartbeat TTL expires (~3 missed beats). Gated exactly like a
+	// register (mesh secret / register token), and only removes entries this
+	// Address still owns — it can never yank a service a newer pod took over.
+	Deregister bool `json:"deregister,omitempty"`
 }
 
 // RegisterResponse is the success body. ForceIntrospect, when true,

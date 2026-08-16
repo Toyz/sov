@@ -248,6 +248,9 @@ func (p *Plugin) serveRegister(ctx context.Context, req *gateway.Request) *gatew
 	if err != nil {
 		return gateway.ErrorResponse(rpc.BadRequest("address: %v", err))
 	}
+	if rr.Deregister {
+		return p.serveDeregister(ctx, &rr, canonAddr)
+	}
 	hb := rr.HeartbeatInterval
 	if hb <= 0 {
 		hb = 10
@@ -327,6 +330,36 @@ func (p *Plugin) serveRegister(ctx context.Context, req *gateway.Request) *gatew
 	body, _ := json.Marshal(rpc.SuccessResponse{Data: gateway.RegisterResponse{
 		OK: true, TTL: int(ttl.Seconds()), ForceIntrospect: forceIntrospect,
 	}})
+	return &gateway.Response{Status: 200, Body: body}
+}
+
+// serveDeregister withdraws the caller's services from the registry — the
+// graceful-shutdown counterpart to register. It removes ONLY entries whose
+// current address still matches the caller's, so a late or duplicated
+// deregister can never evict a service a newer pod has since taken over.
+// Admission is already vetted by the meshsecret/token HeaderParser on the
+// shared /rpc/_register path, so no extra gate is needed here.
+func (p *Plugin) serveDeregister(ctx context.Context, rr *gateway.RegisterRequest, canonAddr string) *gateway.Response {
+	reg := p.gw.RegisterResolver()
+	names := rr.Services
+	if len(names) == 0 && rr.Name != "" {
+		names = []string{rr.Name}
+	}
+	for _, svc := range names {
+		if svc == "" || strings.HasPrefix(svc, "_") {
+			continue
+		}
+		existing, ok := p.gw.Resolver().Resolve(ctx, svc)
+		if !ok {
+			continue
+		}
+		existingCanon, _ := gateway.NormalizeUpstreamURL(existing.RemoteAddr)
+		if existingCanon != canonAddr {
+			continue // a different pod owns this service now — leave it
+		}
+		reg.Delete(svc)
+	}
+	body, _ := json.Marshal(rpc.SuccessResponse{Data: gateway.RegisterResponse{OK: true}})
 	return &gateway.Response{Status: 200, Body: body}
 }
 

@@ -201,6 +201,7 @@ func (g *Gateway) JoinMesh(ctx context.Context, opts MeshOptions) error {
 		"interval", interval, "mesh_secret", len(opts.MeshSecret) > 0,
 		"introspectable", opts.Introspectable, "federate", federated, "federate_all", opts.FederateAll)
 
+	hbDone := make(chan struct{})
 	go runHeartbeat(ctx, hc, opts.UpstreamURL, &payload, interval, opts.MeshSecret, opts.RegisterToken, refresh, g.Log(),
 		func() {
 			// Upstream gateway force-flipped introspect=true (explorer
@@ -216,9 +217,19 @@ func (g *Gateway) JoinMesh(ctx context.Context, opts MeshOptions) error {
 				g.Log().Info("mesh: upstream gateway force-enabled introspect (explorer-equipped); pod payload updated",
 					"upstream", opts.UpstreamURL)
 			}
-		})
+		}, hbDone)
 
-	return g.ListenAndServe(ctx, opts.Address)
+	err := g.ListenAndServe(ctx, opts.Address)
+	// On graceful shutdown (ctx cancelled) wait, bounded, for the heartbeat
+	// goroutine to POST its deregister before returning — otherwise the
+	// withdrawal races process exit and the pod's routes linger until the TTL.
+	if ctx.Err() != nil {
+		select {
+		case <-hbDone:
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return err
 }
 
 func buildRegisterPayload(name, advertise string, interval time.Duration, roles RoleFlag, introspectable bool, federate []string) []byte {
@@ -246,7 +257,12 @@ func buildRegisterPayload(name, advertise string, interval time.Duration, roles 
 	return payload
 }
 
-func runHeartbeat(ctx context.Context, hc *http.Client, upstream string, payload *atomic.Pointer[[]byte], interval time.Duration, meshSecret, registerToken []byte, refresh func() []byte, logger Logger, onForceIntrospect func()) {
+func runHeartbeat(ctx context.Context, hc *http.Client, upstream string, payload *atomic.Pointer[[]byte], interval time.Duration, meshSecret, registerToken []byte, refresh func() []byte, logger Logger, onForceIntrospect func(), done chan struct{}) {
+	if done != nil {
+		// Closed when the loop exits (after any graceful deregister) so
+		// JoinMesh can wait for the withdrawal before the process exits.
+		defer close(done)
+	}
 	register := func() {
 		// refresh (FederateAll mode) recomputes the payload from live
 		// state each beat; a nil return means "nothing to advertise yet"
@@ -302,12 +318,57 @@ func runHeartbeat(ctx context.Context, hc *http.Client, upstream string, payload
 			onForceIntrospect()
 		}
 	}
+	// deregister is the graceful-shutdown withdrawal: it re-sends the last
+	// advertised body with deregister=true so the registry drops this pod's
+	// routes immediately instead of waiting for the TTL. Best-effort — the
+	// heartbeat ctx is already cancelled at this point, so it runs on a fresh,
+	// short-lived context.
+	deregister := func() {
+		body := *payload.Load()
+		var m map[string]any
+		if json.Unmarshal(body, &m) != nil {
+			return
+		}
+		m["deregister"] = true
+		dbody, err := json.Marshal(m)
+		if err != nil {
+			return
+		}
+		dctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(dctx, http.MethodPost, upstream+"/rpc/_register", bytes.NewReader(dbody))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if len(meshSecret) > 0 {
+			sig, ts := meshsecretproto.Sign(meshSecret, dbody, time.Now())
+			req.Header.Set(meshsecretproto.RegisterSigHeader, sig)
+			req.Header.Set(meshsecretproto.RegisterTsHeader, ts)
+		}
+		if len(registerToken) > 0 {
+			req.Header.Set(registertokenproto.RegisterTokenHeader, string(registerToken))
+		}
+		resp, err := hc.Do(req)
+		if err != nil {
+			if logger != nil {
+				logger.Warn("mesh.deregister: upstream unreachable on shutdown", "upstream", upstream, "err", err)
+			}
+			return
+		}
+		resp.Body.Close()
+		if logger != nil {
+			logger.Info("mesh.deregister: withdrew services from upstream", "upstream", upstream)
+		}
+	}
+
 	register()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			deregister()
 			return
 		case <-t.C:
 			register()

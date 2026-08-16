@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"time"
@@ -18,7 +19,9 @@ func main() {
 	gw.Register(&users.UserRouter{Store: users.NewMemoryStore()})
 	gw.MustUse(introspect.New())
 
-	log.Fatal(gw.JoinMesh(context.Background(), sov.MeshOptions{
+	ctx, stop := sov.ShutdownContext()
+	defer stop()
+	if err := gw.JoinMesh(ctx, sov.MeshOptions{
 		UpstreamURL:    env("SOV_GATEWAY", "http://localhost:8080"),
 		Address:        env("SOV_LISTEN", ":9003"),
 		Advertise:      env("SOV_ADVERTISE", "http://localhost:9003"),
@@ -26,7 +29,9 @@ func main() {
 		Introspectable: true,
 		MeshSecret:     []byte(env("SOV_MESH_SECRET", "demo-only-mesh-secret")),
 		RegisterToken:  []byte(env("SOV_REGISTER_TOKEN", "")),
-	}))
+	}); err != nil && !errors.Is(err, context.Canceled) {
+		log.Fatal(err)
+	}
 }
 
 func env(k, def string) string {
