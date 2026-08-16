@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -75,11 +76,11 @@ func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
 	snap := g.pluginRoutes
 	g.muPlugins.RUnlock()
 	if best := longestPluginRoute(snap, req.Path); best >= 0 {
-		if resp := runPluginRoute(snap[best], ctx, req); resp != nil {
+		if resp := g.runPluginRoute(snap[best], ctx, req); resp != nil {
 			return resp
 		}
 		for _, r := range pluginRoutesExcept(snap, req.Path, best) {
-			if resp := runPluginRoute(r, ctx, req); resp != nil {
+			if resp := g.runPluginRoute(r, ctx, req); resp != nil {
 				return resp
 			}
 		}
@@ -155,8 +156,34 @@ func (g *Gateway) RecordDispatch(req *Request, router, method, path string, resp
 
 // runPluginRoute invokes a plugin route's handler, stamping ModePlugin when the
 // handler left Mode unset. Returns nil when the handler DECLINES.
-func runPluginRoute(r pluginRoute, ctx context.Context, req *Request) *Response {
-	resp := r.handler(ctx, req)
+//
+// It CONTAINS a panic from the handler — the rpc surface, MCP tools/call, the
+// batch/batchstream fan-out, static, explorer, or any custom surface — so a
+// single bad request or handler bug can't crash the process. Every HTTP surface
+// flows through here (framework endpoints excepted), including the batch/
+// batchstream per-entry goroutines, which run OUTSIDE the transport's own
+// per-connection recover. The panic is routed through the recovery machinery
+// (RecoveryHandler + a logged failure) and converted to a clean 500.
+func (g *Gateway) runPluginRoute(r pluginRoute, ctx context.Context, req *Request) (resp *Response) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			failure := HookFailure{
+				HookName:   "RouteHandler",
+				PluginName: r.owner,
+				Err:        fmt.Errorf("panic: %v", rec),
+				Panic:      rec,
+				Stack:      debug.Stack(),
+			}
+			resp = g.dispatchRecovery(failure)
+			if resp == nil {
+				resp = ErrorResponse(rpc.Internal("internal server error"))
+			}
+			if resp.Mode == "" {
+				resp.Mode = ModePlugin
+			}
+		}
+	}()
+	resp = r.handler(ctx, req)
 	if resp != nil && resp.Mode == "" {
 		resp.Mode = ModePlugin
 	}
