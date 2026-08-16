@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/Toyz/sov/gateway"
 )
@@ -84,6 +85,40 @@ type Report struct {
 	Authz           *gateway.AuthzBinding `json:"authz,omitempty"`
 	Remotes         map[string][]string   `json:"remotes,omitempty"`
 	Introspectables []string              `json:"introspectables,omitempty"`
+	Build           *BuildInfo            `json:"build,omitempty"`
+}
+
+// BuildInfo is the running binary's build provenance, read from the Go build
+// info the linker stamps. Lets ops answer "what revision is this pod" from the
+// wire — for deploy/rollback tracking and debugging a heterogeneous mesh.
+type BuildInfo struct {
+	GoVersion string `json:"go_version,omitempty"`
+	Path      string `json:"path,omitempty"`     // main module path
+	Version   string `json:"version,omitempty"`  // main module version ((devel) for local builds)
+	Revision  string `json:"revision,omitempty"` // vcs.revision
+	Time      string `json:"time,omitempty"`     // vcs.time
+	Modified  bool   `json:"modified,omitempty"` // vcs.modified — built from a dirty tree
+}
+
+// readBuildInfo reads the importing binary's build info. Returns nil when it is
+// unavailable (e.g. `go run` without stamping).
+func readBuildInfo() *BuildInfo {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return nil
+	}
+	out := &BuildInfo{GoVersion: bi.GoVersion, Path: bi.Main.Path, Version: bi.Main.Version}
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			out.Revision = s.Value
+		case "vcs.time":
+			out.Time = s.Value
+		case "vcs.modified":
+			out.Modified = s.Value == "true"
+		}
+	}
+	return out
 }
 
 // ServeRoute builds the manifest report on demand.
@@ -112,6 +147,7 @@ func (p *Plugin) ServeRoute(_ context.Context, req *gateway.Request) *gateway.Re
 	}
 	rpt.Auth = p.gw.AuthBinding()
 	rpt.Authz = p.gw.AuthzBinding()
+	rpt.Build = readBuildInfo()
 	body, _ := json.Marshal(rpt)
 	return &gateway.Response{Status: http.StatusOK, Header: gateway.Header{"Content-Type": "application/json"}, Body: body}
 }
