@@ -120,6 +120,9 @@ func (g *Gateway) Use(p any) error {
 	if sv, ok := p.(SealVerifier); ok {
 		entry.sealVerifier = sv
 	}
+	if rc, ok := p.(ReadinessContributor); ok {
+		entry.readinessContrib = rc
+	}
 	if ha, ok := p.(HealthAggregator); ok {
 		entry.healthAggregator = ha
 	}

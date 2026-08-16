@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ type Gateway struct {
 	register      *RegisterResolver
 	proxy         *http.Client
 	breakers      *breakerManager // per-upstream circuit breaker on remote dispatch
+	serving       atomic.Int32    // serving state (starting|ready|draining) for /rpc/_ready
 	dispatch      Handler         // wrapped chain (middleware → handle)
 
 	// Auth + authz bindings. Both optional. The gateway calls the
@@ -416,6 +418,14 @@ func (g *Gateway) ListenAndServe(ctx context.Context, addr string) error {
 	if err := g.callLifecycleStart(ctx); err != nil {
 		return fmt.Errorf("gateway: lifecycle start failed: %w", err)
 	}
+	// Now serving: /rpc/_ready flips to 200. On ctx cancel it flips to draining
+	// (503) BEFORE the server's graceful drain runs, so an orchestrator stops
+	// routing NEW traffic here while in-flight requests finish.
+	g.serving.Store(servingReady)
+	go func() {
+		<-ctx.Done()
+		g.serving.Store(servingDraining)
+	}()
 	defer g.callLifecycleStop(context.Background())
 	return g.server.ListenAndServe(ctx, addr)
 }

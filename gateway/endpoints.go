@@ -28,6 +28,11 @@ func (g *Gateway) frameworkEndpoint(ctx context.Context, req *Request) *Response
 			return ErrorResponse(&rpc.Error{Status: 405, Code: "BAD_REQUEST", Message: "method not allowed"})
 		}
 		return g.handleHealth(ctx)
+	case "/rpc/_ready":
+		if req.Method != http.MethodGet && req.Method != http.MethodPost {
+			return ErrorResponse(&rpc.Error{Status: 405, Code: "BAD_REQUEST", Message: "method not allowed"})
+		}
+		return g.handleReady(ctx)
 	case "/rpc/_introspect":
 		// Opt-in: the catalog discloses the full API surface, so the
 		// public endpoint is exposed only via gw.Use(introspect.New()).
