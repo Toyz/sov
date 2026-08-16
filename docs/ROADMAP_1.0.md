@@ -99,9 +99,9 @@ policy. Verify with live examples, not just `go test`.
   no example; chirp handlers have no unit tests. (DX P1-6)
 - [ ] **W5.7 `sov gen mock`** `[P1][M-L]` — DECISION NEEDED: emit a contract-verifiable mock pod
   from a catalog (the "free mock" thesis is aspirational today). (DX P1-7)
-- [ ] **W5.8 Wire-compat guard** `[P1][M]` — `sov catalog snapshot` + `diff` (golden catalog,
+- [x] **W5.8 Wire-compat guard** `[P1][M]` — `sov catalog snapshot` + `diff` (golden catalog,
   CI fails on breaking delta) reusing `ShapeHash`. (DX P1-8)
-- [ ] **W5.9 Scaffold tests + CI + Dockerfiles** `[P1][S-M]` — `sov init` ships no `_test.go`,
+- [x] **W5.9 Scaffold tests + CI + Dockerfiles** `[P1][S-M]` — `sov init` ships no `_test.go`,
   no CI; monolith/hybrid have no Dockerfile. (DX P1-9)
 - [ ] **W5.10 Hygiene docs** `[P2][S]` — CONTRIBUTING, ADR index, getting-started matching
   current API (three different "expose a router" patterns today). (DX #10)
