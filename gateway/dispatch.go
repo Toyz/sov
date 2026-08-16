@@ -53,9 +53,40 @@ func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 	// specific one for this request (RecordDispatch, e.g. MCP tools/call).
 	if !req.recorded {
 		router, method, _ := rpc.SplitRPCPath(req.Path)
-		g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode)
+		g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP)
+		req.recorded = true
 	}
 	return resp
+}
+
+// remoteIPOf returns req.RemoteIP, nil-safe.
+func remoteIPOf(req *Request) string {
+	if req == nil {
+		return ""
+	}
+	return req.RemoteIP
+}
+
+// recordDispatchMiddleware is the OUTERMOST middleware. It exists so a request
+// rejected by the auth or authz middleware (401/403) — which short-circuits
+// before handle() runs and thus never reaches handle's own recording — is still
+// emitted as a DispatchEvent, so audit + metrics see auth failures and authz
+// denials, not just calls that made it to a handler. handle sets req.recorded
+// when it records a call that got through, so this fires only for the
+// pre-handler short-circuits it would otherwise miss.
+func (g *Gateway) recordDispatchMiddleware() Middleware {
+	return func(next Handler) Handler {
+		return func(ctx context.Context, req *Request) *Response {
+			started := time.Now()
+			resp := next(ctx, req)
+			if resp != nil && !req.recorded {
+				router, method, _ := rpc.SplitRPCPath(req.Path)
+				g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP)
+				req.recorded = true
+			}
+			return resp
+		}
+	}
 }
 
 func (g *Gateway) handleInner(ctx context.Context, req *Request) *Response {
@@ -151,7 +182,7 @@ func (g *Gateway) RecordDispatch(req *Request, router, method, path string, resp
 		// direct /rpc call), not twice (outer /mcp + tool).
 		req.recorded = true
 	}
-	g.recordDispatchEventWithMode(router, method, path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode)
+	g.recordDispatchEventWithMode(router, method, path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, remoteIPOf(req))
 }
 
 // runPluginRoute invokes a plugin route's handler, stamping ModePlugin when the

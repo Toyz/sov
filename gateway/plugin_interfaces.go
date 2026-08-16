@@ -103,6 +103,7 @@ type DispatchEvent struct {
 	Status    int           `json:"status"`
 	Duration  time.Duration `json:"duration_ns"`
 	Subject   string        `json:"subject,omitempty"`
+	RemoteIP  string        `json:"remote_ip,omitempty"`
 	ErrorCode string        `json:"error_code,omitempty"`
 	BatchID   string        `json:"batch_id,omitempty"`
 	At        time.Time     `json:"at"`

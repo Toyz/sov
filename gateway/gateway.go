@@ -254,7 +254,7 @@ func New(opts ...Option) *Gateway {
 func (g *Gateway) rebuildChain() {
 	g.muMiddleware.Lock()
 	defer g.muMiddleware.Unlock()
-	all := []Middleware{g.authMiddleware(), g.authzMiddleware()}
+	all := []Middleware{g.recordDispatchMiddleware(), g.authMiddleware(), g.authzMiddleware()}
 	all = append(all, g.middlewares...)
 	chain := g.innerHandler
 	for i := len(all) - 1; i >= 0; i-- {
