@@ -66,6 +66,14 @@ examples, not just unit tests.
   and the retry signal — parity with the Go/Python/Swift/Kotlin clients.
 
 ### Changed
+- **RouteHandler match order** is now by SPECIFICITY (longest matching pattern
+  wins), not registration order, so a broad surface (`/rpc/`, `/`) can no longer
+  shadow a more-specific route by being registered first. Equal-length matches
+  still resolve to the earliest-registered, and a `nil` return still declines +
+  falls through to the next match. New optional **`RoutePrioritizer`** interface
+  (`RoutePriority() int`) lets a plugin override specificity — higher wins over a
+  longer pattern, negatives yield (e.g. a lockdown handler on `/`). The stale
+  interface doc that claimed "registration order" is corrected.
 - **BREAKING (`RegisterStore`)** — the pluggable registry store now holds replicas:
   `Delete(service, address string)` (was `Delete(service)`),
   `Snapshot() map[string][]RegisterEntry` (was `map[string]RegisterEntry`), and

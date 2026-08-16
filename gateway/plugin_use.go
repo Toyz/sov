@@ -206,15 +206,22 @@ func (g *Gateway) Use(p any) error {
 	g.muPlugins.Lock()
 	g.plugins = append(g.plugins, entry)
 	if entry.routeHandler != nil {
+		// Optional explicit ordering: a plugin implementing RoutePrioritizer
+		// overrides specificity (higher priority wins over a longer pattern).
+		priority := 0
+		if rp, ok := entry.routeHandler.(RoutePrioritizer); ok {
+			priority = rp.RoutePriority()
+		}
 		for _, pat := range entry.routeHandler.RoutePatterns() {
 			if pat == "" {
 				continue
 			}
 			g.pluginRoutes = append(g.pluginRoutes, pluginRoute{
-				pattern: pat,
-				subtree: pat[len(pat)-1] == '/',
-				handler: entry.routeHandler.ServeRoute,
-				owner:   entry.name,
+				pattern:  pat,
+				subtree:  pat[len(pat)-1] == '/',
+				handler:  entry.routeHandler.ServeRoute,
+				owner:    entry.name,
+				priority: priority,
 			})
 		}
 	}

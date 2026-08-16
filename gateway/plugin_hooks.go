@@ -28,6 +28,9 @@ type pluginRoute struct {
 	subtree bool
 	handler func(ctx context.Context, req *Request) *Response
 	owner   string
+	// priority overrides specificity-based ordering (RoutePrioritizer). Higher
+	// wins over a longer pattern; default 0. See RouteHandler / RoutePrioritizer.
+	priority int
 }
 
 // snapshotPlugins returns a clone of g.plugins taken under the read
@@ -50,19 +53,32 @@ func (r pluginRoute) matches(path string) bool {
 	return path == r.pattern
 }
 
-// longestPluginRoute returns the index into snap of the MOST-SPECIFIC (longest
-// pattern) route matching path, or -1. A single zero-alloc scan — this is the
-// hot path, hit once per request. Specificity (not registration order) decides,
-// so a broad surface like the /rpc builtin ("/rpc/") never shadows a
-// more-specific route ("/rpc/_explorer/") or a catch-all SPA ("/").
+// longestPluginRoute returns the index into snap of the MOST-SPECIFIC route
+// matching path, or -1. A single zero-alloc scan — this is the hot path, hit
+// once per request. Order is by explicit priority first (RoutePrioritizer), then
+// pattern length, so a broad surface like the /rpc builtin ("/rpc/") never
+// shadows a more-specific route ("/rpc/_explorer/") or a catch-all SPA ("/") —
+// and a plugin can override that with RoutePriority. Registration order is NOT a
+// factor except as the tiebreak for fully-equal routes (the earliest wins, since
+// moreSpecific is strict).
 func longestPluginRoute(snap []pluginRoute, path string) int {
 	best := -1
 	for i := range snap {
-		if snap[i].matches(path) && (best < 0 || len(snap[i].pattern) > len(snap[best].pattern)) {
+		if snap[i].matches(path) && (best < 0 || moreSpecific(snap[i], snap[best])) {
 			best = i
 		}
 	}
 	return best
+}
+
+// moreSpecific reports whether route a should win over b: higher priority first,
+// then longer pattern. Equal on both → false, so an equal-ranked incumbent (the
+// earlier-registered route already held as best) keeps the win.
+func moreSpecific(a, b pluginRoute) bool {
+	if a.priority != b.priority {
+		return a.priority > b.priority
+	}
+	return len(a.pattern) > len(b.pattern)
 }
 
 // pluginRoutesExcept returns every route matching path EXCEPT the one at
@@ -80,7 +96,7 @@ func pluginRoutesExcept(snap []pluginRoute, path string, exceptIdx int) []plugin
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
-		return len(out[i].pattern) > len(out[j].pattern)
+		return moreSpecific(out[i], out[j])
 	})
 	return out
 }

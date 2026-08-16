@@ -398,11 +398,32 @@ type HealthAggregator interface {
 // "/" matches the subtree (prefix match); no trailing "/" matches the
 // exact path only. Routes are checked AFTER the framework's own
 // endpoints (_health/_introspect/_register/_batch) so plugins extend
-// the framework surface but cannot shadow built-ins. Match order is
-// registration order — register the most specific patterns first.
+// the framework surface but cannot shadow built-ins.
+//
+// Match order is by SPECIFICITY, not registration order: the longest matching
+// pattern wins, so a broad surface ("/rpc/") never shadows a more-specific route
+// ("/rpc/_explorer/") or a catch-all SPA ("/") no matter when each was
+// registered. Among fully-equal routes (same priority AND pattern length) the
+// earliest-registered wins. A handler may DECLINE by returning a nil *Response,
+// and routing falls through to the next-most-specific match — this is how a "/"
+// SPA coexists with /rpc dispatch. Return a non-nil Response (including a 404)
+// to CLAIM the path and stop fall-through. To override specificity, also
+// implement RoutePrioritizer.
 type RouteHandler interface {
 	RoutePatterns() []string
 	ServeRoute(ctx context.Context, req *Request) *Response
+}
+
+// RoutePrioritizer is an optional interface a RouteHandler may implement to
+// override specificity-based match order. A higher RoutePriority() is tried
+// before any longer pattern; the default (unimplemented) is 0, and negatives are
+// allowed. Use it when a plugin must win — or deliberately lose — regardless of
+// pattern length: e.g. a maintenance/lockdown handler that should intercept
+// every path (high priority on "/"), or a fallback that should yield to
+// everything (negative priority). Ties (equal priority AND length) still fall
+// back to registration order.
+type RoutePrioritizer interface {
+	RoutePriority() int
 }
 
 // PluginInfo is the introspect-time descriptor of a registered plugin.
