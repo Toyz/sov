@@ -113,9 +113,19 @@ func (g *Gateway) recordDispatchMiddleware() Middleware {
 	return func(next Handler) Handler {
 		return func(ctx context.Context, req *Request) *Response {
 			started := time.Now()
-			g.inFlight.Add(1)
+			n := g.inFlight.Add(1)
 			defer g.inFlight.Add(-1)
-			resp := next(ctx, req)
+			var resp *Response
+			if g.maxInFlight > 0 && n > g.maxInFlight {
+				// Load shed: reject immediately (retryable 503) rather than
+				// accept unbounded concurrent work and exhaust goroutines/FDs.
+				resp = ErrorResponse(&rpc.Error{
+					Status: http.StatusServiceUnavailable, Code: "OVERLOADED",
+					Message: "server overloaded; retry later", Retryable: true,
+				})
+			} else {
+				resp = next(ctx, req)
+			}
 			if resp != nil && !req.recorded {
 				router, method, _ := rpc.SplitRPCPath(req.Path)
 				g.recordDispatchEventWithMode(router, method, req.Path, resp.Status, started, subjectOf(req), errCodeFromBody(resp.Body), "", resp.Mode, req.RemoteIP, requestIDOf(req, resp))

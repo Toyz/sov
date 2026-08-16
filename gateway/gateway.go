@@ -27,6 +27,7 @@ type Gateway struct {
 	breakers      *breakerManager // per-upstream circuit breaker on remote dispatch
 	serving       atomic.Int32    // serving state (starting|ready|draining) for /rpc/_ready
 	inFlight      atomic.Int64    // requests currently in the dispatch chain (in-flight gauge)
+	maxInFlight   int64           // load-shed cap; 0 = unlimited
 	dispatch      Handler         // wrapped chain (middleware → handle)
 
 	// Auth + authz bindings. Both optional. The gateway calls the
@@ -100,6 +101,11 @@ type Options struct {
 	// dispatch (default: 5 consecutive failures → open, 10s cooldown). Set
 	// RemoteBreaker.Disabled to turn it off.
 	RemoteBreaker BreakerConfig
+	// MaxInFlight load-sheds: when more than this many requests are being
+	// handled concurrently, further requests get an immediate retryable 503
+	// OVERLOADED instead of being accepted and exhausting goroutines/FDs.
+	// 0 (default) = unlimited.
+	MaxInFlight int
 }
 
 // Middleware wraps the gateway's request handler. Return a non-nil
@@ -156,6 +162,25 @@ func WithMiddleware(mw ...Middleware) Option {
 	return func(o *Options) { o.Middleware = append(o.Middleware, mw...) }
 }
 
+// WithRemoteBreaker tunes the per-upstream circuit breaker on remote dispatch.
+// See Options.RemoteBreaker.
+func WithRemoteBreaker(cfg BreakerConfig) Option {
+	return func(o *Options) { o.RemoteBreaker = cfg }
+}
+
+// WithAuthCacheTTL caps how long a verified bearer is trusted from the default
+// claims cache before re-verifying — the revocation-lag bound. See
+// Options.AuthCacheTTL.
+func WithAuthCacheTTL(d time.Duration) Option {
+	return func(o *Options) { o.AuthCacheTTL = d }
+}
+
+// WithMaxInFlight load-sheds: concurrent requests above n get a retryable 503
+// OVERLOADED. 0 = unlimited. See Options.MaxInFlight.
+func WithMaxInFlight(n int) Option {
+	return func(o *Options) { o.MaxInFlight = n }
+}
+
 // New constructs a Gateway. All Options are optional — the bare
 // gateway.New() returns a usable standalone gateway with sensible
 // defaults. The gateway always owns its rpc.Engine internally; reach
@@ -210,6 +235,7 @@ func New(opts ...Option) *Gateway {
 		authCache:     o.ClaimsCache,
 		middlewares:   append([]Middleware{}, o.Middleware...),
 		breakers:      newBreakerManager(o.RemoteBreaker),
+		maxInFlight:   int64(o.MaxInFlight),
 	}
 	g.defaultRecovery = &defaultRecoveryHandler{gw: g}
 	// Route rpc.Engine boot warnings (HELL-281) through the gateway's
