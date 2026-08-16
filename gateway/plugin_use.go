@@ -7,23 +7,6 @@ import (
 	"reflect"
 )
 
-// Use registers a plugin on the gateway. The argument is `any` because
-// plugins are duck-typed: the gateway checks each sub-interface
-// (HeaderInjector, AuthTranslator, …) via Go interface assertion and
-// stashes pointers in the appropriate slot list.
-//
-// If the plugin ALSO has RPC-shaped methods (matching the same
-// signature contract gw.Register requires), they are registered on the
-// engine — one Use call yields both extension hooks and wire-callable
-// methods.
-//
-// Use is safe to call before or after ListenAndServe. Plugins added
-// post-start participate in subsequent requests; existing in-flight
-// requests are not retroactively wrapped.
-//
-// Returns an error when the plugin satisfies NO sub-interface AND has
-// no RPC methods — that's almost certainly a bug (the caller probably
-// forgot to make the methods exported, or passed the wrong type).
 // UseAll calls Use on each plugin in order. First error stops the
 // chain so config-applying plugins that need to succeed before later
 // plugins fail fast. Preset packages return []any slices that pair
@@ -58,6 +41,23 @@ func (g *Gateway) MustUse(p any) {
 	}
 }
 
+// Use registers a plugin on the gateway. The argument is `any` because
+// plugins are duck-typed: the gateway checks each sub-interface
+// (HeaderInjector, AuthTranslator, …) via Go interface assertion and
+// stashes pointers in the appropriate slot list.
+//
+// If the plugin ALSO has RPC-shaped methods (matching the same
+// signature contract gw.Register requires), they are registered on the
+// engine — one Use call yields both extension hooks and wire-callable
+// methods.
+//
+// Use is safe to call before or after ListenAndServe. Plugins added
+// post-start participate in subsequent requests; existing in-flight
+// requests are not retroactively wrapped.
+//
+// Returns an error when the plugin satisfies NO sub-interface AND has
+// no RPC methods — that's almost certainly a bug (the caller probably
+// forgot to make the methods exported, or passed the wrong type).
 func (g *Gateway) Use(p any) error {
 	if p == nil {
 		return fmt.Errorf("gateway.Use: plugin is nil")

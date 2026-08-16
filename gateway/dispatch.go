@@ -108,11 +108,6 @@ func subjectOf(req *Request) string {
 	return ""
 }
 
-// RecordDispatch emits a DispatchHook event (audit, metrics) for a call a
-// surface dispatched OUTSIDE the /rpc HTTP path — an MCP tools/call, say — so
-// observability plugins see per-call router/method/status/subject just as they
-// do for /rpc, instead of only the opaque outer request. Status, error code, and
-// Mode are read from resp; subject from req. No-op when resp is nil.
 // PreParserHeader returns the header state captured at gateway ingress — before
 // any HeaderParser plugin mutated req.Header — falling back to req.Header when no
 // snapshot was taken (no registered method uses header= params). A surface that
@@ -141,6 +136,11 @@ func InheritRequestSnapshot(sub, parent *Request) {
 	}
 }
 
+// RecordDispatch emits a DispatchHook event (audit, metrics) for a call a
+// surface dispatched OUTSIDE the /rpc HTTP path — an MCP tools/call, say — so
+// observability plugins see per-call router/method/status/subject just as they
+// do for /rpc, instead of only the opaque outer request. Status, error code, and
+// Mode are read from resp; subject from req. No-op when resp is nil.
 func (g *Gateway) RecordDispatch(req *Request, router, method, path string, resp *Response, started time.Time) {
 	if resp == nil {
 		return
