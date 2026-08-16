@@ -86,7 +86,7 @@ policy. Verify with live examples, not just `go test`.
 - [x] **W5.1 Fix README headline quickstart** `[P0][S]` — `sov.New()` mounts no surface →
   the copy-paste quickstart 404s. Fix docs (and decide whether `sov.New` should default-mount
   `rpc.New()`). (DX P0-1)
-- [ ] **W5.2 Generated-client resilience** `[P0][M]` — retry-on 429/503/network + backoff/jitter
+- [x] **W5.2 Generated-client resilience** `[P0][M]` — retry-on 429/503/network + backoff/jitter
   + `Idempotency-Key` + per-call timeout into every preamble; TS `call()` has NO timeout today;
   TS misses `X-Sov-Request-Id`. (DX P0-2, #11)
 - [x] **W5.3 Release engineering** `[P0][S-M]` — `CHANGELOG.md`, `docs/VERSIONING.md` (stability
