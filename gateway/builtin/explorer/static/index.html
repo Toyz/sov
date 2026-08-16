@@ -7,21 +7,42 @@
   <link rel="stylesheet" href="/rpc/_explorer/static/style.css">
 </head>
 <body>
-  <header>
-    <h1>sov explorer</h1>
-    <nav>
-      <button data-tab="methods" class="active">Methods</button>
-      <button data-tab="types">Types</button>
-      <span id="drift-badge" hidden></span>
-      <label id="show-internal-label" title="Reveal soft-internal methods (framework auth/authz hooks stay hidden)">
-        <input type="checkbox" id="show-internal"> Show internal
-      </label>
-    </nav>
-  </header>
-  <main>
-    <aside id="sidebar"></aside>
-    <section id="detail"></section>
-  </main>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">sov<span class="brand-dim">/explorer</span></div>
+      <button id="palette-open" class="palette-trigger" title="Search (Ctrl/Cmd+K)">
+        <span class="palette-trigger-label">search methods, types</span>
+        <kbd class="kbd-hint">&#8984;K</kbd>
+      </button>
+      <nav class="tabs">
+        <button data-tab="methods" class="active">methods</button>
+        <button data-tab="types">types</button>
+      </nav>
+      <div class="topbar-right">
+        <span id="drift-badge" class="drift-badge" hidden></span>
+        <label class="internal-toggle" title="Reveal soft-internal methods (framework auth/authz hooks stay hidden)">
+          <input type="checkbox" id="show-internal"> internal
+        </label>
+        <button id="theme-toggle" class="icon-btn" title="Toggle light / dark" aria-label="Toggle theme">&#9680;</button>
+      </div>
+    </header>
+    <main class="split">
+      <aside id="sidebar" class="sidebar"></aside>
+      <section id="detail" class="detail"></section>
+    </main>
+  </div>
+
+  <div id="palette" class="palette" hidden>
+    <div class="palette-box" role="dialog" aria-modal="true" aria-label="Command palette">
+      <div class="palette-field">
+        <input id="palette-input" class="palette-input" type="text"
+               placeholder="Jump to a method or type&#8230;" spellcheck="false" autocomplete="off">
+        <kbd class="kbd-hint palette-esc">esc</kbd>
+      </div>
+      <ul id="palette-results" class="palette-results"></ul>
+    </div>
+  </div>
+
   <script src="/rpc/_explorer/static/app.js"></script>
 </body>
 </html>

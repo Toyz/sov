@@ -270,6 +270,12 @@ func isStdlibType(t reflect.Type) bool {
 	if p == "" {
 		return false
 	}
+	// "main" has no "." either, but it is the user's own entrypoint package, not
+	// stdlib — a single-binary app keeps its types (types defined in package main
+	// were otherwise silently dropped from the catalog).
+	if p == "main" {
+		return false
+	}
 	for i := 0; i < len(p); i++ {
 		if p[i] == '.' {
 			return false
