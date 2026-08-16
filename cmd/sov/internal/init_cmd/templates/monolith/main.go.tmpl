@@ -28,7 +28,7 @@ type EchoOut struct {
 }
 
 // Echo returns the input string. Replace with your own handler.
-func (r *EchoRouter) Echo(ctx *sov.Context, in EchoIn) (*EchoOut, error) {
+func (r *EchoRouter) Echo(ctx *sov.Context, in *EchoIn) (*EchoOut, error) {
 	return &EchoOut{Echo: in.Message}, nil
 }
 

@@ -43,13 +43,13 @@ func TestScaffoldBuildsForEveryMode(t *testing.T) {
 		{
 			name:      "monolith",
 			argv:      []string{"monolith", "demo"},
-			wantFiles: []string{"main.go", "go.mod", ".gitignore", "Makefile"},
+			wantFiles: []string{"main.go", "handler_test.go", "go.mod", ".gitignore", "Makefile", "Dockerfile", ".github/workflows/ci.yml"},
 			buildDirs: []string{"."},
 		},
 		{
 			name:      "hybrid",
 			argv:      []string{"hybrid", "demo"},
-			wantFiles: []string{"main.go", "go.mod", ".gitignore", "Makefile"},
+			wantFiles: []string{"main.go", "handler_test.go", "go.mod", ".gitignore", "Makefile", "Dockerfile", ".github/workflows/ci.yml"},
 			buildDirs: []string{"."},
 		},
 		{
@@ -58,7 +58,7 @@ func TestScaffoldBuildsForEveryMode(t *testing.T) {
 			wantFiles: []string{
 				"gateway/main.go", "pod/main.go", "Dockerfile",
 				"docker-compose.yml", "go.mod", ".gitignore", "README.md",
-				".sov.env",
+				".sov.env", ".github/workflows/ci.yml",
 			},
 			buildDirs: []string{"./gateway", "./pod"},
 		},
@@ -68,7 +68,7 @@ func TestScaffoldBuildsForEveryMode(t *testing.T) {
 			wantFiles: []string{
 				"prime/main.go", "team/main.go", "pod/main.go",
 				"Dockerfile", "docker-compose.yml", "go.mod",
-				".gitignore", "README.md", ".sov.env",
+				".gitignore", "README.md", ".sov.env", ".github/workflows/ci.yml",
 			},
 			buildDirs: []string{"./prime", "./team", "./pod"},
 		},
@@ -95,6 +95,9 @@ func TestScaffoldBuildsForEveryMode(t *testing.T) {
 				runGo(t, dir, "mod", "tidy")
 				runGoIn(t, filepath.Join(dir, sub), "build", "./...")
 			}
+			// Compile AND run the scaffolded handler tests (rpctest) — proves the
+			// _test.go template is valid, not just that main builds.
+			runGo(t, dir, "test", "./...")
 		})
 	}
 }
