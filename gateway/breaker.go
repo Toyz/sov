@@ -17,6 +17,18 @@ type BreakerConfig struct {
 	// Disabled turns the breaker off entirely — every remote dispatch is
 	// attempted, as it was before the breaker existed.
 	Disabled bool
+	// FailureRateThreshold ejects a replica whose failure RATE over the recent
+	// window reaches this fraction (0..1), even without consecutive failures —
+	// catching a pod that errors intermittently (e.g. 50% 5xx), which the
+	// consecutive-count trip alone never notices (W1.6 outlier ejection). 0
+	// (default) disables rate-based ejection.
+	FailureRateThreshold float64
+	// RollingWindow is how many recent outcomes the failure rate is computed
+	// over. Default 20 when FailureRateThreshold > 0.
+	RollingWindow int
+	// MinRequests is the minimum window fill before rate-ejection can trip, so a
+	// cold breaker doesn't eject on one or two early errors. Default = window.
+	MinRequests int
 }
 
 type breakerState int
@@ -29,8 +41,51 @@ const (
 
 type upstreamBreaker struct {
 	state    breakerState
-	failures int
+	failures int // consecutive failures (count-based trip)
 	openedAt time.Time
+
+	// Rolling outcome window for rate-based ejection (W1.6). ring[i]=true means
+	// that slot was a failure; fails is the live failure count in the ring.
+	ring   []bool
+	idx    int
+	filled int
+	fails  int
+}
+
+// trip opens the breaker and restarts its cooldown.
+func (b *upstreamBreaker) trip(now time.Time) {
+	b.state = breakerOpen
+	b.openedAt = now
+	b.failures = 0 // consecutive counter is a closed-state concern only
+}
+
+// observe folds one outcome into the rolling window, evicting the oldest slot
+// when full so fails always reflects the last window outcomes.
+func (b *upstreamBreaker) observe(failure bool, window int) {
+	if len(b.ring) != window {
+		b.ring = make([]bool, window)
+		b.idx, b.filled, b.fails = 0, 0, 0
+	}
+	if b.filled == window && b.ring[b.idx] {
+		b.fails-- // the slot we're about to overwrite was a failure
+	}
+	b.ring[b.idx] = failure
+	if failure {
+		b.fails++
+	}
+	b.idx = (b.idx + 1) % window
+	if b.filled < window {
+		b.filled++
+	}
+}
+
+// resetWindow clears the rolling window — used after a successful recovery probe
+// so stale pre-ejection failures don't immediately re-eject the pod.
+func (b *upstreamBreaker) resetWindow() {
+	for i := range b.ring {
+		b.ring[i] = false
+	}
+	b.idx, b.filled, b.fails = 0, 0, 0
 }
 
 // breakerManager holds one breaker per upstream address. Upstream count is
@@ -40,6 +95,9 @@ type breakerManager struct {
 	disabled  bool
 	threshold int
 	cooldown  time.Duration
+	rate      float64 // rate-ejection threshold (0 = off)
+	window    int     // rolling window size
+	minReq    int     // min window fill before rate-ejection trips
 	now       func() time.Time
 
 	mu      sync.Mutex
@@ -55,10 +113,21 @@ func newBreakerManager(cfg BreakerConfig) *breakerManager {
 	if cooldown <= 0 {
 		cooldown = 10 * time.Second
 	}
+	window := cfg.RollingWindow
+	if window <= 0 {
+		window = 20
+	}
+	minReq := cfg.MinRequests
+	if minReq <= 0 || minReq > window {
+		minReq = window
+	}
 	return &breakerManager{
 		disabled:  cfg.Disabled,
 		threshold: threshold,
 		cooldown:  cooldown,
+		rate:      cfg.FailureRateThreshold,
+		window:    window,
+		minReq:    minReq,
 		now:       time.Now,
 		buckets:   map[string]*upstreamBreaker{},
 	}
@@ -128,22 +197,35 @@ func (m *breakerManager) record(addr string, ok bool) {
 	defer m.mu.Unlock()
 	b := m.buckets[addr]
 	if b == nil {
-		if ok {
-			return // success on a fresh upstream: nothing to track yet
+		if ok && m.rate <= 0 {
+			return // success on a fresh upstream, no rate tracking: nothing to do
 		}
 		b = &upstreamBreaker{}
 		m.buckets[addr] = b
 	}
 	if ok {
+		wasHalfOpen := b.state == breakerHalfOpen
 		b.state = breakerClosed
 		b.failures = 0
-		return
+		if wasHalfOpen {
+			// A recovery probe succeeded — start the rolling window fresh so
+			// stale pre-ejection failures can't immediately re-eject the pod.
+			b.resetWindow()
+		}
+	} else {
+		b.failures++
+		if b.state == breakerHalfOpen || b.failures >= m.threshold {
+			b.trip(m.now())
+		}
 	}
-	b.failures++
-	if b.state == breakerHalfOpen || b.failures >= m.threshold {
-		b.state = breakerOpen
-		b.openedAt = m.now()
-		b.failures = 0 // reopening restarts the cooldown; counter is closed-state only
+	// Rate-based outlier ejection (W1.6): even without a consecutive-failure
+	// trip, eject a replica whose failure rate over the window is an outlier.
+	if m.rate > 0 {
+		b.observe(!ok, m.window)
+		if b.state != breakerOpen && b.filled >= m.minReq &&
+			float64(b.fails)/float64(b.filled) >= m.rate {
+			b.trip(m.now())
+		}
 	}
 }
 

@@ -16,7 +16,10 @@ examples, not just unit tests.
 - **Header-bound params** — `sov:"header=X-Tenant-Id"` binds a struct field from
   a request header (pre-parser snapshot, consistent with the authz gate).
 - **Circuit breaker** on remote dispatch — per-upstream, opens after repeated
-  transport **or** 5xx failures, half-open probe on cooldown.
+  transport **or** 5xx failures, half-open probe on cooldown. Optional
+  **rate-based outlier ejection** (`FailureRateThreshold` over a rolling window)
+  ejects a replica that fails intermittently, which the consecutive-count trip
+  alone never catches; a recovery probe resets the window.
 - **Graceful mesh deregister** on shutdown (`sov.ShutdownContext()`), plus
   readiness/liveness split (`/rpc/_ready`, serving-state, `ReadinessContributor`).
 - **ratelimit** builtin (token bucket, pluggable `Limiter` backend).
