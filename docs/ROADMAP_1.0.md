@@ -48,7 +48,7 @@ policy. Verify with live examples, not just `go test`.
   has_more`) + `PageParams`; codegen async-iterator. (protocol #4)
 - [ ] **W2.5 Idempotency-key + store seam** `[P1][M]` — `Idempotency-Key` header +
   `IdempotencyStore` iface (in-mem default), short-circuit replays. Pairs with W1.4. (protocol #5)
-- [ ] **W2.6 Method-level deprecation + Sunset** `[P1][S-M]` — `deprecated[=reason]` on the
+- [x] **W2.6 Method-level deprecation + Sunset** `[P1][S-M]` — `deprecated[=reason]` on the
   method sentinel; `MethodDescriptor.Deprecated`; emit to introspect/OpenAPI/codegen +
   optional `Sunset` header. (protocol #6)
 - [ ] **W2.7 First-class server-streaming RPC + codegen** `[P1][L]` — DECISION NEEDED: promote
@@ -72,7 +72,7 @@ policy. Verify with live examples, not just `go test`.
 ## Wave 4 — security depth
 - [ ] **W4.1 Token cache TTL + revocation seam** `[P0][M]` — cap verify-cache lifetime
   independent of token expiry; refuse/warn on no-expiry tokens; `Revoked(token)` seam. (security P0-2)
-- [ ] **W4.2 TLS: fix broken escape hatch + real config** `[P1][M]` — `ListenAndServe` ignores
+- [x] **W4.2 TLS: fix broken escape hatch + real config** `[P1][M]` — `ListenAndServe` ignores
   a supplied `TLSConfig` (silently plaintext); add TLS via `ServeTLS`, `NetHTTPOptions.TLS`,
   mesh mTLS via proxy client `tls.Config`; correct SECURITY.md. (security P1-3)
 - [ ] **W4.3 HMAC key rotation** `[P1][M]` — `Secrets [][]byte`/kid; sign with primary, verify
@@ -89,13 +89,13 @@ policy. Verify with live examples, not just `go test`.
 - [ ] **W5.2 Generated-client resilience** `[P0][M]` — retry-on 429/503/network + backoff/jitter
   + `Idempotency-Key` + per-call timeout into every preamble; TS `call()` has NO timeout today;
   TS misses `X-Sov-Request-Id`. (DX P0-2, #11)
-- [ ] **W5.3 Release engineering** `[P0][S-M]` — `CHANGELOG.md`, `docs/VERSIONING.md` (stability
+- [x] **W5.3 Release engineering** `[P0][S-M]` — `CHANGELOG.md`, `docs/VERSIONING.md` (stability
   guarantee: wire contract is the compat surface), tag process. (DX P0-3)
 - [ ] **W5.4 Exported `gatewaytest` harness** `[P1][M]` — promote gateway spin-up (currently
   internal gwtest) so consumers test mesh routing/auth-across-hop. (DX P1-4)
 - [x] **W5.5 Fuzz the sov tag parser** `[P1][S]` — `FuzzParseSovTag`; the flagged bug-hotspot
   is unfuzzed. (DX P1-5)
-- [ ] **W5.6 rpctest in chirp handlers** `[P1][S]` — the flagship test-ergonomics package is in
+- [x] **W5.6 rpctest in chirp handlers** `[P1][S]` — the flagship test-ergonomics package is in
   no example; chirp handlers have no unit tests. (DX P1-6)
 - [ ] **W5.7 `sov gen mock`** `[P1][M-L]` — DECISION NEEDED: emit a contract-verifiable mock pod
   from a catalog (the "free mock" thesis is aspirational today). (DX P1-7)
