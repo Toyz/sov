@@ -28,6 +28,10 @@ examples, not just unit tests.
 - **build-info** on `/rpc/_manifest`; **RemoteIP** + **RequestID** on `DispatchEvent`.
 - **OpenAPI 3.0** generator (`sov gen openapi`); **`sov catalog` snapshot/diff**
   backward-compat guard.
+- **`sov gen mock`** — generates a runnable Go mock pod from the catalog: every
+  service method served with a schema-shaped example response over the identical
+  wire contract, so a client tested against the mock works unchanged against the
+  real backend. Streaming methods mock as a short NDJSON stream.
 - **Request.RawQuery**; **Request.Host** (net/http lifts Host out of the header
   map, so it was invisible to plugins — now first-class for vhost/tenant routing
   and audit); MCP `tools/list` auth gate; scaffold ships tests + CI + Dockerfiles.

@@ -15,6 +15,7 @@ import (
 	"github.com/Toyz/sov/cmd/sov/internal/gen/all"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/golang"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/kotlin"
+	"github.com/Toyz/sov/cmd/sov/internal/gen/mock"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/openapi"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/python"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/swift"
@@ -45,6 +46,8 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		return python.Run(rest, stdout, stderr)
 	case "openapi":
 		return openapi.Run(rest, stdout, stderr)
+	case "mock":
+		return mock.Run(rest, stdout, stderr)
 	case "-h", "--help", "help":
 		usage(stdout)
 		return 0
@@ -69,6 +72,7 @@ Languages:
   swift     Generate a Swift client (URLSession + Codable)
   python    Generate a Python client (httpx + dataclasses)  [alias: py]
   openapi   Generate an OpenAPI 3.0 spec (openapi.json)
+  mock      Generate a runnable Go mock pod (schema-shaped example responses)
 
 Run "sov gen <language> -h" for language-specific flags.`)
 }
