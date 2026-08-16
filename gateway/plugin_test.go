@@ -137,9 +137,9 @@ func TestPlugin_RejectsEmptyContract(t *testing.T) {
 	type bareType struct{}
 	err := gw.Use(&bareType{})
 	if err == nil {
-		t.Fatal("expected error on plugin with no hooks + no router methods")
+		t.Fatal("expected error on plugin with no methods + no router")
 	}
-	if !strings.Contains(err.Error(), "satisfies no plugin sub-interface") {
+	if !strings.Contains(err.Error(), "satisfy no plugin interface") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

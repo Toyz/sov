@@ -47,15 +47,22 @@ func (g *Gateway) PluginHookViews() []PluginHookView {
 	defer g.muPlugins.RUnlock()
 	out := make([]PluginHookView, 0, len(g.plugins))
 	for _, e := range g.plugins {
+		_, hi := e.any.(HeaderInjector)
+		_, hp := e.any.(HeaderParser)
+		_, at := e.any.(AuthTranslator)
+		_, dh := e.any.(DispatchHook)
+		_, bv := e.any.(BootValidator)
+		_, lh := e.any.(LifecycleHook)
+		_, ic := e.any.(IntrospectContributor)
 		out = append(out, PluginHookView{
 			Name:             e.name,
-			HeaderInjector:   e.headerInjector != nil,
-			HeaderParser:     e.headerParser != nil,
-			AuthTranslator:   e.authTranslator != nil,
-			DispatchHook:     e.dispatchHook != nil,
-			BootValidator:    e.bootValidator != nil,
-			LifecycleHook:    e.lifecycleHook != nil,
-			IntroContributor: e.introContributor != nil,
+			HeaderInjector:   hi,
+			HeaderParser:     hp,
+			AuthTranslator:   at,
+			DispatchHook:     dh,
+			BootValidator:    bv,
+			LifecycleHook:    lh,
+			IntroContributor: ic,
 		})
 	}
 	return out

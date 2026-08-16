@@ -70,86 +70,18 @@ func (g *Gateway) Use(p any) error {
 	if doc, ok := p.(PluginDoc); ok {
 		entry.doc = doc.Doc()
 	}
-	if hi, ok := p.(HeaderInjector); ok {
-		entry.headerInjector = hi
-	}
-	if hp, ok := p.(HeaderParser); ok {
-		entry.headerParser = hp
-	}
-	if hc, ok := p.(HeaderClaimer); ok {
-		raw := hc.ClaimedHeaders()
-		canon := make([]string, 0, len(raw))
-		for _, h := range raw {
-			if h == "" {
-				continue
-			}
-			canon = append(canon, http.CanonicalHeaderKey(h))
-		}
-		entry.headerClaims = canon
-	}
-	if at, ok := p.(AuthTranslator); ok {
-		entry.authTranslator = at
-	}
-	if dh, ok := p.(DispatchHook); ok {
-		entry.dispatchHook = dh
-	}
-	if bv, ok := p.(BootValidator); ok {
-		entry.bootValidator = bv
-	}
-	if lh, ok := p.(LifecycleHook); ok {
-		entry.lifecycleHook = lh
-	}
-	if ic, ok := p.(IntrospectContributor); ok {
-		entry.introContributor = ic
-	}
-	if mw, ok := p.(Middlewarer); ok {
-		entry.middlewarer = mw
-	}
-	if ca, ok := p.(ConfigApplier); ok {
-		entry.configApplier = ca
-	}
-	if rh, ok := p.(RouteHandler); ok {
-		entry.routeHandler = rh
-	}
-	if mc, ok := p.(MeshConflictPolicy); ok {
-		entry.meshConflict = mc
-	}
-	if ut, ok := p.(UpstreamTrustPolicy); ok {
-		entry.upstreamTrust = ut
-	}
-	if sv, ok := p.(SealVerifier); ok {
-		entry.sealVerifier = sv
-	}
-	if rc, ok := p.(ReadinessContributor); ok {
-		entry.readinessContrib = rc
-	}
-	if ha, ok := p.(HealthAggregator); ok {
-		entry.healthAggregator = ha
-	}
-	if r, ok := p.(Resolver); ok {
-		entry.resolver = r
-	}
-	if s, ok := p.(Server); ok {
-		entry.server = s
-	}
-	if cc, ok := p.(ContextContributor); ok {
-		entry.ctxContributor = cc
-	}
-	if ri, ok := p.(ResponseInterceptor); ok {
-		entry.respInterceptor = ri
-	}
-	if rh, ok := p.(RecoveryHandler); ok {
-		entry.recoveryHandler = rh
-	}
+	// Only METADATA is precomputed at Use time. The dispatch fan-outs discover
+	// their implementers generically via PluginsImplementing[T] (plugin_discover.go),
+	// so the core no longer catalogues every hook interface — the plugin owns its
+	// interfaces, and a subsystem asks for the ones it needs. Interfaces with a
+	// Use-time SIDE EFFECT (ConfigApplier, RouteHandler, Resolver, Server,
+	// Middlewarer) are asserted inline below where that effect happens.
 	if pd, ok := p.(PluginDependency); ok {
 		entry.requires = pd.Requires()
 		entry.after = pd.After()
 	}
 	if cp, ok := p.(CapabilityProvider); ok {
 		entry.capabilities = cp.Capabilities()
-	}
-	if lg, ok := p.(Logger); ok {
-		entry.logger = lg
 	}
 
 	// Detect RPC-method router shape. Same rule rpc.Engine.Register
@@ -172,31 +104,28 @@ func (g *Gateway) Use(p any) error {
 		entry.name = goTypeLabel(p)
 	}
 
-	// Requires + After validation is deferred to ListenAndServe so
-	// operators can Use plugins in any order. The framework topo-sorts
-	// at boot — see Gateway.reorderPluginsByDependency. Use only
-	// validates the entry has at least one capability.
-
-	// Require at least one capability — empty Use() is a no-op bug.
-	// satisfiedHooks() enumerates every sub-interface slot; reuse it as
-	// the single source of truth so this guard can't drift from the set
-	// of hooks when a new one is added.
-	if !entry.hasRouter && len(entry.satisfiedHooks()) == 0 {
-		return fmt.Errorf("gateway.Use: %s satisfies no plugin sub-interface and has no RPC methods", entry.name)
+	// Reject a plugin that exposes NOTHING — no exported methods and no RPC
+	// router. It can't satisfy any interface (a core hook OR a builtin's own
+	// extension interface), so it's a wiring bug. This is method-based, not a
+	// fixed interface list: implementing ANY interface means having methods.
+	if !entry.hasRouter && !hasAnyExportedMethod(p) {
+		return fmt.Errorf("gateway.Use: %s exposes no methods and no RPC router — it can satisfy no plugin interface", entry.name)
 	}
 
-	// ConfigApplier runs FIRST — it mutates gateway-owned state that
-	// other hooks may read (e.g. setting the HMAC secret before any
-	// HeaderInjector reads it).
+	// Requires + After validation is deferred to ListenAndServe so operators can
+	// Use plugins in any order (topo-sorted at boot — reorderPluginsByDependency).
 	//
-	// Contract: if Apply fails (HaltErr), Use returns the error and the
-	// plugin is NOT added to g.plugins — it is "as if Use never ran". A
-	// plugin that failed to configure itself must not appear half-wired in
-	// the dispatch path or /rpc/_introspect.plugins. The append below is
-	// reached only after Apply succeeds.
-	if entry.configApplier != nil {
+	// There is deliberately NO "must implement a known hook" gate: a plugin may
+	// implement only a builtin's OWN interface (e.g. an explorer extension) the
+	// core knows nothing about, and it must still register. An inert plugin is
+	// harmless — it simply never matches any PluginsImplementing query.
+
+	// ConfigApplier runs FIRST — it mutates gateway-owned state that other hooks
+	// may read (e.g. the HMAC secret). If Apply fails, Use returns the error and
+	// the plugin is NOT added, so a mis-configured plugin never appears half-wired.
+	if ca, ok := p.(ConfigApplier); ok {
 		_, bootErr, _ := g.safeHook("ConfigApplier", entry.name, func() error {
-			return entry.configApplier.Apply(g)
+			return ca.Apply(g)
 		})
 		if bootErr != nil {
 			return bootErr
@@ -205,39 +134,38 @@ func (g *Gateway) Use(p any) error {
 
 	g.muPlugins.Lock()
 	g.plugins = append(g.plugins, entry)
-	if entry.routeHandler != nil {
-		// Optional explicit ordering: a plugin implementing RoutePrioritizer
-		// overrides specificity (higher priority wins over a longer pattern).
+	g.hookCache = nil // plugin set changed — drop memoized PluginsImplementing results
+	if rh, ok := p.(RouteHandler); ok {
+		// Optional explicit ordering: a RoutePrioritizer overrides specificity
+		// (higher priority wins over a longer pattern).
 		priority := 0
-		if rp, ok := entry.routeHandler.(RoutePrioritizer); ok {
+		if rp, ok := rh.(RoutePrioritizer); ok {
 			priority = rp.RoutePriority()
 		}
-		for _, pat := range entry.routeHandler.RoutePatterns() {
+		for _, pat := range rh.RoutePatterns() {
 			if pat == "" {
 				continue
 			}
 			g.pluginRoutes = append(g.pluginRoutes, pluginRoute{
 				pattern:  pat,
 				subtree:  pat[len(pat)-1] == '/',
-				handler:  entry.routeHandler.ServeRoute,
+				handler:  rh.ServeRoute,
 				owner:    entry.name,
 				priority: priority,
 			})
 		}
 	}
-	if entry.resolver != nil && g.resolverChain != nil {
-		g.resolverChain.addPlugin(entry.resolver)
+	if r, ok := p.(Resolver); ok && g.resolverChain != nil {
+		g.resolverChain.addPlugin(r)
 	}
-	if entry.server != nil {
-		// Swap the gateway's server pointer. Re-bind the dispatch
-		// handler so the new server gets it; re-wire the trust guard
-		// if the new server is the default NetHTTPServer + trust mode
-		// was requested at construction.
-		g.server = entry.server
-		entry.server.Handle(func(ctx context.Context, req *Request) *Response {
+	if s, ok := p.(Server); ok {
+		// Swap the gateway's server; re-bind dispatch + re-wire the trust guard
+		// when it's the default NetHTTPServer and trust mode was requested.
+		g.server = s
+		s.Handle(func(ctx context.Context, req *Request) *Response {
 			return g.dispatch(ctx, req)
 		})
-		if ns, ok := entry.server.(*NetHTTPServer); ok && g.trustUpstreamWired {
+		if ns, ok := s.(*NetHTTPServer); ok && g.trustUpstreamWired {
 			ns.SetTrustGuard(func(r *http.Request, _ []byte) bool {
 				if !g.upstreamTrusted(r.Header) {
 					return false
@@ -251,8 +179,8 @@ func (g *Gateway) Use(p any) error {
 	}
 	g.muPlugins.Unlock()
 
-	if entry.middlewarer != nil {
-		g.UseMiddleware(entry.middlewarer.Wrap)
+	if mw, ok := p.(Middlewarer); ok {
+		g.UseMiddleware(mw.Wrap)
 	}
 
 	return nil
@@ -263,6 +191,22 @@ func (g *Gateway) Use(p any) error {
 // "Router" AND has at least one exported method. The engine itself
 // re-validates signatures and panics on mismatch; this is just a
 // gate so non-router plugins don't get pushed through Register.
+// hasAnyExportedMethod reports whether v's type has at least one exported method
+// — i.e. it can satisfy some interface. Interface-agnostic, so a plugin
+// implementing an interface the core has never heard of still passes.
+func hasAnyExportedMethod(v any) bool {
+	t := reflect.TypeOf(v)
+	if t == nil {
+		return false
+	}
+	for i := 0; i < t.NumMethod(); i++ {
+		if t.Method(i).IsExported() {
+			return true
+		}
+	}
+	return false
+}
+
 func hasRouterShape(v any) bool {
 	if v == nil {
 		return false

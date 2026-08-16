@@ -96,9 +96,10 @@ func (g *Gateway) reorderPluginsByDependency() error {
 		return nil
 	}
 
-	// Commit the topological order. The dispatch fan-out paths iterate
-	// g.plugins directly (filtering by sub-interface), so reordering the
-	// slice is all that's needed — there are no slot lists to rebuild.
+	// Commit the topological order. The dispatch fan-out paths discover plugins
+	// via PluginsImplementing (order = this slice), so reordering is all that's
+	// needed — but drop the memoized results so they rebuild in the new order.
 	g.plugins = sorted
+	g.hookCache = nil
 	return nil
 }
