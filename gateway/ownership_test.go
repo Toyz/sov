@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 
 	. "github.com/Toyz/sov/gateway"
@@ -39,7 +38,8 @@ func (r *WidgetReaderRouter) Read(_ *rpc.Context, p *ReadParams) (map[string]str
 	return map[string]string{"name": p.W.Name}, nil
 }
 
-// SecondMakerRouter ALSO returns Widget — creates an ambiguous owner.
+// SecondMakerRouter ALSO returns Widget with the SAME shape — a shared model,
+// not a smell.
 type SecondMakerRouter struct{}
 
 func (r *SecondMakerRouter) Make(_ *rpc.Context, p *MakeParams) (*Widget, error) {
@@ -99,7 +99,9 @@ func TestOwnership_RequestOnlyTypeIsUnowned(t *testing.T) {
 	}
 }
 
-func TestOwnership_TwoProducersIsAmbiguous(t *testing.T) {
+// Two producers returning the SAME shape is a shared domain model — info, not a
+// warning. It is marked Shared, lists its co-owners, and does NOT drift.
+func TestOwnership_TwoProducersSameShapeIsShared(t *testing.T) {
 	gw := gwtest.New()
 	gw.Register(&WidgetMakerRouter{})
 	gw.Register(&SecondMakerRouter{})
@@ -107,27 +109,23 @@ func TestOwnership_TwoProducersIsAmbiguous(t *testing.T) {
 	rpt := introspect(t, gw)
 	td := rpt.Types["Widget"]
 	if td.Owner != "" {
-		t.Errorf("Widget.Owner = %q, want empty when ambiguous", td.Owner)
+		t.Errorf("Widget.Owner = %q, want empty with multiple producers", td.Owner)
 	}
-	// Owners surfaces BOTH producers structurally (not just in the warning).
+	if !td.Shared {
+		t.Errorf("Widget.Shared = false, want true (identical shape from 2 producers)")
+	}
 	if len(td.Owners) != 2 || !contains(td.Owners, "WidgetMaker") || !contains(td.Owners, "SecondMaker") {
 		t.Errorf("Widget.Owners = %v, want [SecondMaker WidgetMaker]", td.Owners)
 	}
-	// Producers must NOT leak into the consumer list.
 	if contains(td.Consumers, "WidgetMaker") || contains(td.Consumers, "SecondMaker") {
 		t.Errorf("Widget.Consumers = %v, must exclude producers", td.Consumers)
 	}
-	if len(rpt.BoundaryWarnings) == 0 {
-		t.Fatal("expected a boundary warning for two producers of Widget")
+	// Same shape → NOT drift, and NO boundary warning (that noise is gone).
+	if _, drifted := rpt.CrossRefs["Widget"]; drifted {
+		t.Errorf("Widget must not drift when both producers share a shape")
 	}
-	found := false
-	for _, w := range rpt.BoundaryWarnings {
-		if strings.Contains(w, "Widget") && strings.Contains(w, "ambiguous") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("boundary warning did not mention Widget ambiguity: %v", rpt.BoundaryWarnings)
+	if len(rpt.BoundaryWarnings) != 0 {
+		t.Errorf("shared same-shape type must not raise a boundary warning: %v", rpt.BoundaryWarnings)
 	}
 }
 

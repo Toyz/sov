@@ -33,8 +33,18 @@ async function loadCatalog() {
   paletteIndex = buildPaletteIndex();
   const badge = $('#drift-badge');
   const drift = state.catalog.cross_refs ? Object.keys(state.catalog.cross_refs).length : 0;
-  if (drift > 0) { badge.hidden = false; badge.textContent = `${drift} drift`; }
-  else { badge.hidden = true; }
+  if (drift > 0) {
+    badge.hidden = false;
+    badge.textContent = `${drift} drift`;
+    badge.title = 'jump to drifted types';
+    badge.style.cursor = 'pointer';
+    badge.onclick = () => {
+      const first = Object.keys(state.catalog.cross_refs || {}).sort()[0];
+      if (first) { state.tab = 'types'; state.selectedType = first; setTab('types'); route(); }
+    };
+  } else {
+    badge.hidden = true;
+  }
   route();
 }
 
@@ -386,17 +396,33 @@ function renderTypeDetail(name) {
   detail.appendChild(h);
 
   if (drift) {
+    const variants = drift.variants || [];
+    const diff = drift.diff || [];
+    const diverged = diff.filter(d => d.diverges).map(d => d.field);
     const warn = el('div', 'drift-panel');
-    warn.innerHTML = `<strong>Shape drift.</strong> This type name resolves to ${drift.variants.length} divergent shapes across services. Callers may serialize incompatible payloads.`;
+    warn.innerHTML = `<strong>Shape drift.</strong> <span class="dn">${escapeHTML(name)}</span> resolves to ${variants.length} divergent shapes across services` +
+      (diverged.length
+        ? ` — ${diverged.length} field${diverged.length > 1 ? 's' : ''} differ: ${diverged.map(f => `<code>${escapeHTML(f)}</code>`).join(' ')}.`
+        : '.') +
+      ` Callers may serialize incompatible payloads.`;
     detail.appendChild(warn);
-    drift.variants.forEach((v, i) => {
-      const box = el('div', 'variant ' + (i === 0 ? 'first' : 'diff'));
-      box.innerHTML = `
-        <h4>variant ${i + 1} <span class="hash">hash ${escapeHTML(String(v.shape_hash))}</span></h4>
-        <div class="services">${(v.services || []).map(s => `<span class="used-chip">${escapeHTML(s)}</span>`).join('')}</div>
-        ${fieldsTableHTML(v.fields, {})}`;
-      detail.appendChild(box);
-    });
+
+    // Which service(s) each variant column belongs to.
+    const legend = el('div', 'variant-legend');
+    legend.innerHTML = variants.map((v, i) =>
+      `<div class="vlegend"><span class="vtag v${i % 6}">variant ${i + 1}</span>` +
+      `<span class="hash">${escapeHTML(String(v.shape_hash))}</span>` +
+      `<span class="vservices">${(v.services || []).map(s => `<span class="used-chip">${escapeHTML(s)}</span>`).join('')}</span></div>`
+    ).join('');
+    detail.appendChild(legend);
+
+    // Field × variant matrix — diverging rows highlighted, so you see exactly
+    // which fields moved rather than eyeballing two field tables.
+    if (diff.length) {
+      const wrap = el('div');
+      wrap.innerHTML = driftMatrixHTML(diff, variants.length);
+      detail.appendChild(wrap.firstElementChild);
+    }
     return;
   }
 
@@ -410,6 +436,7 @@ function renderTypeDetail(name) {
   let ownerRow;
   if (owners.length === 0) ownerRow = `<div class="own-row"><span class="own-label">Owner</span><span class="owner-badge unowned">no owner — input-only</span></div>`;
   else if (owners.length === 1) ownerRow = `<div class="own-row"><span class="own-label">Owner</span><span class="owner-badge">${escapeHTML(owners[0])}</span></div>`;
+  else if (td.shared) ownerRow = `<div class="own-row"><span class="own-label">Owners</span><span class="consumer-list">${owners.map(o => `<span class="owner-badge shared">${escapeHTML(o)}</span>`).join('')}<span class="shared-tag">shared — identical shape</span></span></div>`;
   else ownerRow = `<div class="own-row"><span class="own-label">Owners</span><span class="consumer-list">${owners.map(o => `<span class="owner-badge ambiguous">${escapeHTML(o)}</span>`).join('')}<span class="ambiguous-tag">ambiguous</span></span></div>`;
   const consumerRow = consumers.length
     ? `<div class="own-row"><span class="own-label">Consumers</span><span class="consumer-list">${consumers.map(c => `<span class="consumer-chip">${escapeHTML(c)}</span>`).join('')}</span></div>` : '';
@@ -455,6 +482,22 @@ function fieldsTableHTML(fields, opts) {
         return `<tr${f.deprecated ? ' class="row-deprecated"' : ''}><td>${nameCell}</td><td>${escapeHTML(f.designerHint || f.schemaType || '')}${typeRef}</td>${posCell}<td>${flags}</td></tr>`;
       }).join('')}</tbody>
     </table>`;
+}
+
+// driftMatrixHTML renders the field × variant diff: one row per field, one
+// column per variant, cell = the field's type in that variant (or "absent").
+// Diverging rows are highlighted so the actual drift is obvious at a glance.
+function driftMatrixHTML(diff, nVariants) {
+  const heads = Array.from({ length: nVariants }, (_, i) => `<th class="v${i % 6}">variant ${i + 1}</th>`).join('');
+  return `<table class="fields-table drift-matrix">
+    <thead><tr><th>Field</th>${heads}</tr></thead>
+    <tbody>${diff.map(d => {
+      const cells = (d.types || []).map(t => t
+        ? `<td>${escapeHTML(t)}</td>`
+        : `<td class="absent">absent</td>`).join('');
+      return `<tr class="${d.diverges ? 'drow-diff' : 'drow-common'}"><td class="field-name">${escapeHTML(d.field)}</td>${cells}</tr>`;
+    }).join('')}</tbody>
+  </table>`;
 }
 
 function renderUsedBy(detail, usedBy) {

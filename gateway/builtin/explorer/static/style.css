@@ -316,6 +316,26 @@ body {
 .variant .hash { color: var(--faint); font-size: 10.5px; }
 .variant .services { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-bottom: 8px; }
 
+.drift-panel .dn { color: var(--text); }
+.drift-panel code { color: var(--amber); font-size: 12px; }
+
+.variant-legend { display: flex; flex-direction: column; gap: 5px; margin: 4px 0 14px; }
+.vlegend { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.vtag { font-size: 10.5px; color: var(--dim); border: 1px solid var(--line-2); border-radius: 3px; padding: 0 6px; }
+.vlegend .hash { color: var(--faint); font-size: 10.5px; }
+.vservices { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+
+/* field × variant diff matrix */
+.drift-matrix td { border-left: 1px solid var(--line); }
+.drift-matrix td:first-child, .drift-matrix th:first-child { border-left: none; }
+.drift-matrix th { border-left: 1px solid var(--line); }
+.drift-matrix td.absent { color: var(--faint); font-style: italic; }
+.drift-matrix tr.drow-common td { color: var(--dim); }
+.drift-matrix tr.drow-diff td.field-name { color: var(--amber); border-left: 2px solid var(--amber); padding-left: 8px; }
+
+.owner-badge.shared { color: var(--green); }
+.shared-tag { color: var(--faint); font-size: 10.5px; }
+
 /* ---- command palette ------------------------------------------------- */
 .palette { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: flex-start; justify-content: center; padding-top: 13vh; z-index: 50; }
 .palette[hidden] { display: none; }
