@@ -20,7 +20,7 @@ policy. Verify with live examples, not just `go test`.
   `Idempotency-Key`. Shared plumbing for W1.2 + W3.2 + W2.5. (resilience #2, obs #2, protocol #5)
 
 ## Wave 1 — core resilience + mesh routing
-- [ ] **W1.1 Multi-endpoint replicas + `EndpointPicker`** `[P0][L]` — KEYSTONE. Store becomes
+- [x] **W1.1 Multi-endpoint replicas + `EndpointPicker`** `[P0][L]` — KEYSTONE. Store becomes
   `[]RegisterEntry` per name; a 2nd address = replica, not 409. Default round-robin picker,
   breaker-aware (skip open). Unblocks retries/failover/outlier-ejection. (resilience #1)
   <br>**Execution plan (scoped 2026-08-16 — the code below is verified against the current tree):**
@@ -69,7 +69,7 @@ policy. Verify with live examples, not just `go test`.
   chain shares one deadline. (resilience #2)
 - [x] **W1.3 Breaker trips on 5xx** `[P1][S]` — currently only transport errors count; an
   up-but-broken pod (500s) never trips. Count 502/503/504. (resilience #4)
-- [ ] **W1.4 Idempotency-aware retries** `[P1][M]` — bounded retry, exp backoff + full jitter,
+- [x] **W1.4 Idempotency-aware retries** `[P1][M]` — bounded retry, exp backoff + full jitter,
   gated by an idempotency marker/key, re-pick a replica (W1.1), honor the budget (W1.2),
   retry budget to prevent storms. (resilience #3, #8)
 - [x] **W1.5 Load shedding + transport tuning** `[P1][S-M]` — gateway/per-upstream in-flight
