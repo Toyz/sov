@@ -25,6 +25,7 @@ import (
 	"runtime/debug"
 
 	"github.com/Toyz/sov/cmd/sov/internal/call"
+	"github.com/Toyz/sov/cmd/sov/internal/catalogcmd"
 	"github.com/Toyz/sov/cmd/sov/internal/conform"
 	"github.com/Toyz/sov/cmd/sov/internal/drift"
 	"github.com/Toyz/sov/cmd/sov/internal/gen"
@@ -55,6 +56,8 @@ func main() {
 		os.Exit(call.Run(args, os.Stdout, os.Stderr))
 	case "conform":
 		os.Exit(conform.Run(args, os.Stdout, os.Stderr))
+	case "catalog":
+		os.Exit(catalogcmd.Run(args, os.Stdout, os.Stderr))
 	case "version", "--version", "-v":
 		printVersion(os.Stdout)
 	case "-h", "--help", "help":
