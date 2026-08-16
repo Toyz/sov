@@ -16,17 +16,20 @@ import (
 	"testing"
 )
 
-// repoRoot returns the absolute path of the sov repo root. The test
-// file lives at cmd/sov/init_cmd/init_test.go so the root is three
-// dirs up from runtime.Caller's file.
+// repoRoot returns the absolute path of the sov repo root — the module
+// that actually contains package github.com/Toyz/sov, which the scaffold's
+// replace directive must point at. The test file lives at
+// cmd/sov/internal/init_cmd/init_test.go, so the root is four dirs up from
+// runtime.Caller's file (up three lands on .../sov/cmd, a SEPARATE module
+// that does not contain the root package).
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	// .../sov/cmd/sov/init_cmd/init_test.go → up 4 dirs
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	// .../sov/cmd/sov/internal/init_cmd/init_test.go → up 4 dirs = .../sov
+	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "..", ".."))
 }
 
 // scaffoldModes are the build-and-compile-test modes.
