@@ -162,6 +162,12 @@ func unquoteSovValue(v string) string {
 //
 // t must be a struct type. Pointer-to-struct callers should pass
 // t.Elem().
+// maxPositionalSlot caps an explicit sov-tag position. It bounds the ByPos slot
+// array so a hostile/typo'd tag can't drive a huge allocation at Register time.
+// 64Ki is far beyond any real struct's field count; legitimate gaps stay well
+// under it and still reach the contiguity check.
+const maxPositionalSlot = 1 << 16
+
 func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 	if t == nil {
 		return nil, fmt.Errorf("BuildFieldMap: nil type")
@@ -301,6 +307,15 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 					}
 					if p < 0 {
 						return nil, fmt.Errorf("field %s.%s: sov tag position %d must be >= 0", t.Name(), sf.Name, p)
+					}
+					// Reject an absurd position at parse time — before it sizes the
+					// ByPos slot array (make([]int, MaxPos+1)) into a multi-terabyte
+					// allocation that OOM-crashes Register on a typo'd/hostile tag
+					// like `name,99999999999`. The cap is far above any real struct
+					// (no method has 64k positional args), so legitimate gaps still
+					// reach the "must be contiguous" check below.
+					if p > maxPositionalSlot {
+						return nil, fmt.Errorf("field %s.%s: sov tag position %d exceeds the maximum of %d", t.Name(), sf.Name, p, maxPositionalSlot)
 					}
 					info.Position = p
 					explicitPos = true
