@@ -48,7 +48,14 @@ var (
 )
 
 // New returns an upstream-allowlist plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("upstreams.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	m := make(map[string]struct{}, len(cfg.Allowed))
 	for _, raw := range cfg.Allowed {
 		canon, err := gateway.NormalizeUpstreamURL(raw)

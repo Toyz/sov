@@ -45,7 +45,14 @@ var (
 )
 
 // New returns the plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("auth.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	pick := func(v, def string) string {
 		switch v {
 		case "":

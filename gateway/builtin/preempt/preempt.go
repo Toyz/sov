@@ -9,9 +9,9 @@
 // (federation case — Conflict.FederatedAddrs populated). Framework
 // holds no preemption state.
 //
-//	gw.Use(preempt.New(map[string]string{
+//	gw.Use(preempt.New(preempt.Config{Rules: map[string]string{
 //	    "Chirp": "http://team-feed-v2:9100",
-//	}))
+//	}}))
 package preempt
 
 import (
@@ -42,7 +42,14 @@ var (
 )
 
 // New returns a federation-preemption plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("preempt.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	cp := make(map[string]string, len(cfg.Rules))
 	for k, v := range cfg.Rules {
 		canon, err := gateway.NormalizeUpstreamURL(v)

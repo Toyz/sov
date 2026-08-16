@@ -25,7 +25,16 @@ type Config struct {
 type Plugin struct{ secret []byte }
 
 // New returns the meshsecret plugin from cfg.
-func New(cfg Config) *Plugin { return &Plugin{secret: cfg.Secret} }
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("meshsecret.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
+	return &Plugin{secret: cfg.Secret}
+}
 
 // Compile-time proof of the hooks this plugin binds — a signature
 // drift here is a build error, not a silent non-binding at runtime.

@@ -72,7 +72,14 @@ type Plugin struct {
 }
 
 // New returns the registry plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("registry.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	if cfg.IntrospectProbeTimeout <= 0 {
 		cfg.IntrospectProbeTimeout = 2 * time.Second
 	}

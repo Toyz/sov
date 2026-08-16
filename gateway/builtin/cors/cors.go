@@ -9,16 +9,16 @@
 //     Expose-Headers to every successful response so browsers
 //     accept the body.
 //
-// Origin policy:
+// Origin policy is set through Config fields:
 //
-//   - Origins([]string) — exact match, "*" allows all (no credentials)
+//   - Origins []string — exact-match list; "*" allows any (auto-disables credentials)
 //
-//   - OriginFunc(func(origin string) bool) — custom predicate
+//   - OriginFunc func(origin string) bool — custom predicate; overrides Origins
 //
-//   - default — "*" with no credentials
+//   - default (zero-value Config) — "*" with no credentials
 //
-//     gw.Use(cors.New())                              // permissive default
-//     gw.Use(cors.New(cors.Origins("https://app.foo.io"), cors.AllowCredentials()))
+//     gw.Use(cors.New()) // permissive default (any origin, no credentials)
+//     gw.Use(cors.New(cors.Config{Origins: []string{"https://app.foo.io"}, AllowCredentials: true}))
 package cors
 
 import (
@@ -69,7 +69,14 @@ var (
 )
 
 // New returns the cors plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("cors.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	p := &Plugin{
 		allowMethods:     cfg.AllowMethods,
 		allowHeaders:     cfg.AllowHeaders,

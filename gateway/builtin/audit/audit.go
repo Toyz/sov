@@ -5,8 +5,8 @@
 // last events without scraping logs — demonstrates the
 // plugin-as-also-a-service pattern.
 //
-//	gw.Use(audit.New(os.Stdout))                            // log + introspect-only
-//	gw.Use(audit.New(os.Stdout, audit.WithRingSize(500)))   // bigger ring
+//	gw.Use(audit.New())                                             // ring-only, no log stream
+//	gw.Use(audit.New(audit.Config{Out: os.Stdout, RingSize: 500}))  // log + bigger ring
 package audit
 
 import (
@@ -58,7 +58,14 @@ type Config struct {
 }
 
 // New returns the plugin from cfg.
-func New(cfg Config) *AuditRouter {
+func New(cfgs ...Config) *AuditRouter {
+	if len(cfgs) > 1 {
+		panic("audit.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	size := cfg.RingSize
 	if size <= 0 {
 		size = defaultRingSize

@@ -47,7 +47,14 @@ var (
 )
 
 // New returns an explorer plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("explorer.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	prefix := cfg.PathPrefix
 	if prefix == "" {
 		prefix = "/rpc/_explorer"

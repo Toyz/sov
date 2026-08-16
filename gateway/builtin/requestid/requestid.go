@@ -64,7 +64,14 @@ var (
 )
 
 // New returns the request-id plugin from cfg.
-func New(cfg Config) *Plugin {
+func New(cfgs ...Config) *Plugin {
+	if len(cfgs) > 1 {
+		panic("requestid.New: at most one Config")
+	}
+	var cfg Config
+	if len(cfgs) == 1 {
+		cfg = cfgs[0]
+	}
 	gen := cfg.Generator
 	if gen == nil {
 		gen = defaultGenerate
