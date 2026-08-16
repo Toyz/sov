@@ -85,6 +85,16 @@ you already run. Each has a seam.
   `*http.Server` via `NetHTTPOptions.HTTPServer` with `TLSConfig` set. Sov does
   not manage certificates.
 
+- **CSRF + CORS.** Sov auth is **bearer-token** (`Authorization: Bearer`), which
+  is CSRF-immune: a browser does not attach a bearer to a cross-site request the
+  way it attaches ambient cookies, so there is no cross-site request forgery
+  surface for the default posture. If you put **cookie/session auth** in front of
+  sov, CSRF becomes **your** responsibility (SameSite cookies, a CSRF token, or
+  an `Origin` check). The `cors` builtin defaults to allow-any-origin — safe
+  under bearer auth (no credentials ride along), and convenient for the browser
+  explorer; set `cors.Config.Origins` to an allowlist for a cookie-credentialed
+  or hardened deployment.
+
 - **Network isolation.** `upstreams` is a coarse network-topology filter, **not
   authentication** — `X-Sov-Upstream` is a plain client header. On an untrusted
   network, cryptographic upstream trust means `hmacseal` keyed to the mesh
