@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"reflect"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,20 @@ func (g *Gateway) handle(ctx context.Context, req *Request) *Response {
 		req.recorded = true
 	}
 	return resp
+}
+
+// deadlineHeader carries the caller's absolute deadline (unix nanoseconds) so a
+// downstream hop can bound its own work to the remaining budget instead of each
+// hop independently waiting out a full timeout. The deadline builtin honors it
+// on ingress; here we only propagate it.
+const deadlineHeader = "X-Sov-Deadline"
+
+// stampDeadline propagates the ctx deadline onto an outbound hop. No-op when the
+// context has no deadline, so it costs nothing unless a deadline is in play.
+func stampDeadline(ctx context.Context, hreq *http.Request) {
+	if dl, ok := ctx.Deadline(); ok {
+		hreq.Header.Set(deadlineHeader, strconv.FormatInt(dl.UnixNano(), 10))
+	}
 }
 
 // remoteIPOf returns req.RemoteIP, nil-safe.
@@ -437,6 +452,7 @@ func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method strin
 	// X-Sov-Upstream is no longer framework-stamped; the Advertise
 	// plugin owns that header now.
 	g.callHeaderInjectors(ctx, req, hreq)
+	stampDeadline(ctx, hreq)
 
 	// Circuit breaker: after repeated transport failures to this upstream,
 	// fail fast instead of making every call wait out the full proxy timeout.
@@ -494,6 +510,7 @@ func (g *Gateway) BuildProxyRequest(ctx context.Context, method, addr, path stri
 			hreq.Header.Set("X-Forwarded-For", parent.RemoteIP)
 		}
 		g.callHeaderInjectors(ctx, parent, hreq)
+		stampDeadline(ctx, hreq)
 	}
 	if g.advertiseURL != "" {
 		hreq.Header.Set("X-Sov-Upstream", g.advertiseURL)
