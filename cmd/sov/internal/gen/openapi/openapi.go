@@ -156,6 +156,17 @@ func successResponse(m rpc.MethodDescriptor) map[string]any {
 	default:
 		data = map[string]any{} // primitive/map/unknown result
 	}
+	if m.Streaming {
+		// Server-streaming: newline-delimited JSON, one item per line. OpenAPI
+		// can't model a stream natively, so document the NDJSON media type and
+		// the per-ITEM schema (m.Response* already describe the element type).
+		return map[string]any{
+			"description": "server-streaming response: newline-delimited JSON (application/x-ndjson), one item per line",
+			"content": map[string]any{
+				"application/x-ndjson": map[string]any{"schema": data},
+			},
+		}
+	}
 	return map[string]any{
 		"description": "success",
 		"content": map[string]any{

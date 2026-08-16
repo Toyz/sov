@@ -237,6 +237,10 @@ func emitInterface(w io.Writer, rd *rpc.RouterDescriptor) {
 	fmt.Fprintln(w, "// the underlying handler runs in-process or out across the mesh.")
 	fmt.Fprintf(w, "type %s interface {\n", goIdent(rd.Router))
 	for _, md := range rd.Methods {
+		if md.Streaming {
+			fmt.Fprintf(w, "\t// %s server-streams; not yet emitted by the Go client generator (POST %s and read the NDJSON body, or use the TypeScript client).\n", strs.Capitalize(md.Method), md.PostPath)
+			continue
+		}
 		fmt.Fprintf(w, "\t%s(ctx context.Context%s) %s\n", strs.Capitalize(md.Method), paramsArg(rd.Router, md), returnTypes(md))
 	}
 	fmt.Fprintln(w, "}")
@@ -255,6 +259,12 @@ func emitClient(w io.Writer, rd *rpc.RouterDescriptor) {
 }
 
 func emitClientMethod(w io.Writer, typeName, service string, md *rpc.MethodDescriptor) {
+	if md.Streaming {
+		// Server-streaming methods emit an NDJSON stream, not a single result;
+		// the Go generator does not yet produce a streaming consumer. Skip it
+		// so the client stays compilable and matches the interface above.
+		return
+	}
 	resultType := responseTypeName(md)
 	hasResult := resultType != ""
 	fmt.Fprintf(w, "func (c *%s) %s(ctx context.Context%s) %s {\n",

@@ -46,6 +46,18 @@ func fakeCatalog() gateway.IntrospectReport {
 						Method: "legacy", Title: "Legacy", PostPath: "/rpc/Auth/legacy", HasParams: true,
 						ResponseTypeScript: "{ ok: boolean }",
 					},
+					{
+						// Server-streaming method (W2.7): the generator must emit an
+						// AsyncIterable<T> delegating to this.c.stream, and it must
+						// tsc-compile. The Result alias is the per-ITEM type.
+						Method: "tail", Title: "Tail", PostPath: "/rpc/Auth/tail", HasParams: true,
+						Streaming: true,
+						Params: []rpc.ParamField{
+							{JSONName: "room", SchemaType: "string", Required: true, Position: 0},
+						},
+						RequestTypeScript:  "{ room: string }",
+						ResponseTypeScript: "{ line: string }",
+					},
 				},
 			}},
 			// Router named "Page" → collides with the "Page" model type below.

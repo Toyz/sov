@@ -222,6 +222,11 @@ func emitRouter(w io.Writer, rd rpc.RouterDescriptor) {
 }
 
 func emitMethod(w io.Writer, router string, md rpc.MethodDescriptor) {
+	if md.Streaming {
+		fmt.Fprintf(w, "    # %s server-streams (NDJSON); not yet emitted by the Python client generator.\n", pyMethodIdent(md.Method))
+		fmt.Fprintf(w, "    # POST %s and read the response line by line, or use the TypeScript client.\n", md.PostPath)
+		return
+	}
 	resp := responseTypeName(md)
 	respHint := "Any"
 	if resp != "" {

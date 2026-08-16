@@ -200,6 +200,19 @@ func emitMethod(w io.Writer, indent, router string, md rpc.MethodDescriptor) {
 		paramArg = ""
 	}
 	respType := tsIdent(router) + strs.Capitalize(md.Method) + "Result"
+	// Server-streaming method (W2.7): the Result alias is the per-item type;
+	// return an AsyncIterable the caller drains with `for await`.
+	if md.Streaming {
+		if methodHasParams(md) {
+			fmt.Fprintf(w, "%s%s(%s): AsyncIterable<%s> {\n", indent, md.Method, paramArg, respType)
+			fmt.Fprintf(w, "%s  return this.c.stream(%q, %q, p);\n", indent, router, md.Method)
+		} else {
+			fmt.Fprintf(w, "%s%s(): AsyncIterable<%s> {\n", indent, md.Method, respType)
+			fmt.Fprintf(w, "%s  return this.c.stream(%q, %q);\n", indent, router, md.Method)
+		}
+		fmt.Fprintf(w, "%s}\n", indent)
+		return
+	}
 	if methodHasParams(md) {
 		fmt.Fprintf(w, "%sasync %s(%s): Promise<%s> {\n", indent, md.Method, paramArg, respType)
 		fmt.Fprintf(w, "%s  return this.c.call(%q, %q, p);\n", indent, router, md.Method)

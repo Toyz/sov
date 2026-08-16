@@ -51,6 +51,12 @@ examples, not just unit tests.
 - **Pagination** primitives (`rpc.Page[T]` / `PageParams`); field **constraints**
   (`maxlen`), inbound JSON **depth cap**, and an **error taxonomy**
   (`retryable` / `retry_after` / per-field `details`).
+- **First-class server-streaming RPC** — a method returning `(rpc.Stream[T],
+  error)` streams results as NDJSON (one JSON item per line), backed by a Go 1.23
+  `iter.Seq[T]` pulled lazily so unbounded sources stream in constant memory.
+  Works locally and streams THROUGH a mesh hop unbuffered. The TypeScript client
+  generates an `AsyncIterable<T>` consumer (`for await`); the OpenAPI response is
+  documented as `application/x-ndjson`. Bidirectional streaming is a non-goal.
 - **Opt-in `/rpc/_config`** — sanitized runtime-config dump (`configdump` builtin).
 - Generated **TypeScript client**: per-call timeout, `X-Sov-Request-Id` capture,
   and the retry signal — parity with the Go/Python/Swift/Kotlin clients.

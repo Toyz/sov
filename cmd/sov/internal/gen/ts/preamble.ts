@@ -237,4 +237,67 @@ export class SovClient {
     }
     return parsed.data as T;
   }
+
+  /**
+   * Consume a server-STREAMING method as an async iterable. The gateway sends
+   * newline-delimited JSON (one result per line); each line is parsed and
+   * yielded as it arrives. A pre-stream error (4xx/5xx before any line) throws a
+   * SovError; once streaming has begun the status is already committed, so an
+   * error can only surface as the stream ending. No per-call timeout is applied
+   * — streams are long-lived by nature; abort by breaking out of `for await`.
+   *
+   *   for await (const ev of cli.Feed.tail({ room: "general" })) { ... }
+   */
+  async *stream<T>(router: string, method: string, params?: unknown): AsyncGenerator<T> {
+    const args = this.opts.wireShape === "positional"
+      ? [params]
+      : (params ?? {});
+    const f = this.opts.fetch ?? fetch;
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(this.opts.headers ?? {}),
+    };
+    if (this.opts.token) {
+      headers["Authorization"] = `Bearer ${this.opts.token}`;
+    }
+    const resp = await f(`${this.opts.baseURL}/rpc/${router}/${method}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ args }),
+    });
+    if (resp.status >= 400) {
+      const text = await resp.text();
+      const parsed = text ? JSON.parse(text) : {};
+      const e = (parsed.error ?? {}) as Partial<SovError>;
+      const err = new Error(e.message ?? `HTTP ${resp.status}`) as SovError;
+      err.code = e.code as ErrorCode | undefined;
+      err.error_code = e.error_code;
+      err.status = resp.status;
+      err.requestId = resp.headers.get("X-Sov-Request-Id") ?? undefined;
+      throw err;
+    }
+    if (!resp.body) {
+      return;
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) yield JSON.parse(line) as T;
+        }
+      }
+      const last = buf.trim();
+      if (last) yield JSON.parse(last) as T;
+    } finally {
+      reader.releaseLock();
+    }
+  }
 }
