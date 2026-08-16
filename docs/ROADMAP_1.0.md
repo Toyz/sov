@@ -37,7 +37,7 @@ policy. Verify with live examples, not just `go test`.
 - [ ] **W1.6 Outlier ejection / hedging** `[P2][M]` — natural follow-on to W1.1+W1.3.
 
 ## Wave 2 — schema vocabulary / data-model completeness
-- [ ] **W2.1 Field validation constraints** `[P0][M]` — `min/max/minlen/maxlen/pattern/enum`
+- [x] **W2.1 Field validation constraints** `[P0][M]` — `min/max/minlen/maxlen/pattern/enum`
   in the tag grammar; enforce in a post-bind pass; surface to OpenAPI/MCP/codegen. (protocol #1)
 - [x] **W2.2 Request caps** `[P0][S-M]` — `maxitems`/`maxlen` per field + global max array
   len / nesting depth guard in the decode path (decode-amplification DoS). (protocol #2, security P2-6)
