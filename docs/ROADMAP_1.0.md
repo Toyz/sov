@@ -23,6 +23,47 @@ policy. Verify with live examples, not just `go test`.
 - [ ] **W1.1 Multi-endpoint replicas + `EndpointPicker`** `[P0][L]` — KEYSTONE. Store becomes
   `[]RegisterEntry` per name; a 2nd address = replica, not 409. Default round-robin picker,
   breaker-aware (skip open). Unblocks retries/failover/outlier-ejection. (resilience #1)
+  <br>**Execution plan (scoped 2026-08-16 — the code below is verified against the current tree):**
+  - `gateway/mesh_resolver.go` — the contained 90% (mechanical):
+    - `RegisterStore` iface: `Put(service, e)` UPSERTS by `(service, e.Address)`; `Delete(service,
+      address)` removes ONE replica (was `Delete(service)`); `Snapshot() map[string][]RegisterEntry`;
+      `ReapExpired` drops expired replicas. Breaking for external store impls — pre-1.0, document in
+      CHANGELOG. `memRegisterStore.m` → `map[string]map[string]RegisterEntry` (service→addr→entry) for
+      O(1) upsert/delete; Snapshot flattens.
+    - `cache` → `atomic.Pointer[map[string][]RegisterEntry]`; update `snapshot()` + all consumers
+      (Services/AddressGroup/Introspectables/snapshotChanged). AddressGroup already keys by address, so
+      it lists every replica for free. A service is "live" if ANY replica is live.
+    - `Resolve(ctx, service) (*Endpoint, bool)` — SIGNATURE UNCHANGED (so dispatch.go:348 +
+      registry.go callers are untouched): gather live replicas, pick one via `EndpointPicker`.
+    - NEW `EndpointPicker` iface `Pick(service string, live []RegisterEntry) (RegisterEntry, bool)` +
+      default round-robin (per-service `atomic.Uint64` counter) + `WithEndpointPicker` option.
+    - Breaker-aware: inject `breakerOpen func(addr string) bool` into the resolver (nil-safe, set by
+      Gateway like `onChange`). Picker filters open addresses; **if ALL are open, fall back to the full
+      live set** so half-open recovery probes still fire. Add `breakerManager.isOpen(addr) bool`.
+    - `PutEntry(service,address,ttl,opts)` — SIGNATURE UNCHANGED (auth_binding.go:87, registry.go
+      :310/402 untouched); now adds-or-refreshes a replica.
+  - **The risky 10% — the ownership/security model (do NOT rush):**
+    - `registry.go serveRegister` (~295-306): today a different-address register → `409 SERVICE_CONFLICT`
+      unless the preempt plugin allows takeover. W1.1 makes a different address a REPLICA — so DROP the
+      direct-path SERVICE_CONFLICT + preemption call. KEEP `ROLE_CONFLICT` (auth/authz single-owner,
+      276-293) exactly — a replica shares the name so it never trips it.
+    - `registry.go serveDeregister` (~352-360): the single-owner Resolve-match check breaks under
+      replicas (Resolve returns a rotating replica, not necessarily the caller's). Rewrite to
+      `reg.Delete(svc, canonAddr)` unconditionally per name — deletes only the caller's own replica,
+      idempotent, no Resolve needed.
+    - **FEDERATION is the genuinely subtle interaction** (`serveFederated` ~366-406, +preempt plugin):
+      a federated service fronted by N gateways does NOT cleanly become "replicas" — preemption is the
+      intended single-fronting-gateway semantic. Decide explicitly: either (a) keep federated entries
+      single-owner (needs the store to mark an entry federated-exclusive), or (b) allow replica fronts
+      and delete the preemption path. (a) is safer for 1.0. This is why the item is L, not M.
+    - Test churn (intended, not regressions): `register_hardening_test.go` + `registerstore_test.go` +
+      `register_deregister_test.go` assertions that "2nd different address → 409" FLIP to "→ 200, both
+      are replicas, Resolve round-robins." Add: breaker-open replica is skipped; deregister one replica
+      leaves the other; all-open falls back. Verify live via examples/ mesh (walkthrough.sh) — start 2
+      pods of one service, kill -9 one, confirm traffic drains to the survivor.
+    - Security note: replicas-by-default does NOT lower the trust bar — /rpc/_register admission is
+      already gated by meshsecret/token, so a pod that can register a replica is exactly as trusted as
+      one registering a new service. An `exclusive=true` opt-in (stateful singletons) is a post-1.0 flag.
 - [x] **W1.2 Per-call deadline budget** `[P0][M]` — derive `context.WithTimeout` from a
   configurable default + inbound `X-Sov-Deadline`; stamp remaining budget on every hop so a
   chain shares one deadline. (resilience #2)
