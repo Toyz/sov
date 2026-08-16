@@ -108,6 +108,21 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 	// the introspect header so the gateway returns the full payload
 	// (soft-hidden methods included). Request.Path carries no query string,
 	// hence a path variant rather than ?internal=1.
+	// Extension surface: the manifest of plugin-provided assets, and the assets
+	// themselves when a plugin handed us their bytes (ExplorerExtender). Kept off
+	// the catalog path so a plugin needs no route of its own.
+	if strings.HasSuffix(req.Path, "/extensions.json") {
+		return &gateway.Response{
+			Status: http.StatusOK,
+			Header: gateway.Header{"Content-Type": "application/json"},
+			Body:   explorerManifest(p.prefix, p.collectAssets()),
+		}
+	}
+	if strings.HasPrefix(req.Path, p.prefix+"/ext/") {
+		ct, body, status := serveExtAsset(req.Path, p.prefix, p.collectAssets())
+		return &gateway.Response{Status: status, Header: gateway.Header{"Content-Type": ct}, Body: body}
+	}
+
 	header := gateway.Header{}
 	if strings.HasSuffix(req.Path, "/api-internal.json") {
 		header[gateway.IntrospectInternalHeader] = "1"

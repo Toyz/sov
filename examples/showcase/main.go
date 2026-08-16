@@ -31,6 +31,7 @@ func main() {
 	gw := gateway.New()
 	gw.MustUse(rpcsurface.New())
 	gw.MustUse(explorer.New(explorer.Config{Public: true})) // no auth in the demo
+	gw.MustUse(codegenExt{})                                // an explorer extension (real ES module)
 
 	gw.Register(&CatalogRouter{})
 	gw.Register(&BillingRouter{})

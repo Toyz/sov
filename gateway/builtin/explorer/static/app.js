@@ -18,9 +18,46 @@ let state = {
 
 let paletteIndex = [];
 let palette = { open: false, results: [], active: 0 };
+let extensionsLoaded = false;
 
 const $ = sel => document.querySelector(sel);
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+
+// ---- extension SDK (window.sovx) --------------------------------------------
+// Plugin-provided ES modules (listed in /rpc/_explorer/extensions.json) register
+// against this. It is the ENTIRE surface an extension touches — actions on
+// methods/types, hooks on outgoing requests, persisted settings, panels, plus
+// the dashboard's own theme tokens + dom helpers so extensions look native.
+const sovx = {
+  _actions: { method: [], type: [] },
+  _requestHooks: [],
+  _settings: [],       // [{id,label,placeholder,secret}]
+  _settingVals: {},    // id -> value (persisted in this browser)
+
+  // action('method'|'type', {id,label,run(ctx)}) — a button on the detail pane.
+  action(scope, spec) {
+    if ((scope === 'method' || scope === 'type') && spec && typeof spec.run === 'function') {
+      sovx._actions[scope].push({ label: spec.label || spec.id || 'action', run: spec.run });
+    }
+  },
+  // requestHook(fn) — fn({path,headers,body}) mutates a "try it" request in place
+  // (this is how a user extension injects a bearer/identity header).
+  requestHook(fn) { if (typeof fn === 'function') sovx._requestHooks.push(fn); },
+  // setting({id,label,placeholder,secret}) registers a persisted global input;
+  // setting('id') reads its current value.
+  setting(arg) {
+    if (typeof arg === 'string') return sovx._settingVals[arg] || '';
+    if (arg && arg.id && !sovx._settings.some(s => s.id === arg.id)) {
+      sovx._settings.push({ id: arg.id, label: arg.label || arg.id, placeholder: arg.placeholder || '', secret: !!arg.secret });
+    }
+    return undefined;
+  },
+  // theme('--accent') -> the resolved CSS custom-property value.
+  theme(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); },
+  el, escapeHTML,
+  copy(text) { try { return navigator.clipboard.writeText(String(text)); } catch (e) { return Promise.reject(e); } },
+};
+window.sovx = sovx;
 
 async function loadCatalog() {
   // The internal variant returns soft-hidden methods (flagged internal); the
@@ -91,7 +128,7 @@ function setTab(tab) {
   document.querySelectorAll('header nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   document.querySelectorAll('header nav button').forEach(btn => {
     btn.addEventListener('click', () => { state.tab = btn.dataset.tab; setTab(state.tab); route(); });
   });
@@ -99,8 +136,116 @@ document.addEventListener('DOMContentLoaded', () => {
   if (toggle) toggle.addEventListener('change', () => { state.showInternal = toggle.checked; loadCatalog(); });
   initTheme();
   bindKeys();
+  loadSettingVals();
+  await loadExtensions(); // register plugin actions/hooks/settings before first render
+  renderSettingsButton();
   loadCatalog();
 });
+
+// ---- extension loading ------------------------------------------------------
+// Fetch the plugin asset manifest, <link> its CSS, and dynamic-import its ES
+// modules; each module's default export receives the sovx SDK. Best-effort — a
+// failing extension logs and is skipped, never blocking the explorer.
+async function loadExtensions() {
+  if (extensionsLoaded) return;
+  extensionsLoaded = true;
+  let manifest;
+  try {
+    const r = await fetch('/rpc/_explorer/extensions.json');
+    if (!r.ok) return;
+    manifest = await r.json();
+  } catch { return; }
+  for (const href of (manifest.css || [])) {
+    if (document.querySelector(`link[data-sovx="${href}"]`)) continue;
+    const link = el('link'); link.rel = 'stylesheet'; link.href = href; link.setAttribute('data-sovx', href);
+    document.head.appendChild(link);
+  }
+  for (const src of (manifest.js || [])) {
+    try {
+      const mod = await import(src);
+      const reg = mod.default || mod.register;
+      if (typeof reg === 'function') reg(sovx);
+    } catch (e) { console.error('sov: extension failed to load', src, e); }
+  }
+}
+
+function settingsKey() { return 'sov-explorer-settings:' + location.pathname; }
+function loadSettingVals() {
+  try { sovx._settingVals = JSON.parse(localStorage.getItem(settingsKey()) || '{}') || {}; }
+  catch { sovx._settingVals = {}; }
+}
+function saveSettingVals() { try { localStorage.setItem(settingsKey(), JSON.stringify(sovx._settingVals)); } catch {} }
+
+function renderSettingsButton() {
+  const btn = $('#settings-btn');
+  if (!btn) return;
+  btn.hidden = sovx._settings.length === 0;
+}
+function openSettings() {
+  const fields = $('#settings-fields');
+  fields.innerHTML = '';
+  for (const s of sovx._settings) {
+    const wrap = el('label', 'settings-field');
+    wrap.innerHTML = `<span class="settings-name">${escapeHTML(s.label)}</span>`;
+    const inp = el('input');
+    inp.type = s.secret ? 'password' : 'text';
+    inp.spellcheck = false; inp.autocomplete = 'off';
+    inp.placeholder = s.placeholder || '';
+    inp.value = sovx._settingVals[s.id] || '';
+    inp.addEventListener('input', () => {
+      if (inp.value) sovx._settingVals[s.id] = inp.value; else delete sovx._settingVals[s.id];
+      saveSettingVals();
+    });
+    wrap.appendChild(inp);
+    fields.appendChild(wrap);
+  }
+  $('#settings-modal').hidden = false;
+  const first = fields.querySelector('input'); if (first) first.focus();
+}
+function closeSettings() { const m = $('#settings-modal'); if (m) m.hidden = true; }
+
+// renderActions puts an extension's method/type buttons on the detail pane; each
+// click runs the extension with a context bound to a fresh panel host.
+function renderActions(detail, scope, base) {
+  const acts = sovx._actions[scope];
+  if (!acts.length) return;
+  detail.appendChild(sectionHead('Actions'));
+  const row = el('div', 'ext-actions');
+  const host = el('div', 'ext-panels');
+  for (const a of acts) {
+    const b = el('button', 'ext-btn'); b.type = 'button'; b.textContent = a.label;
+    b.addEventListener('click', () => {
+      host.innerHTML = '';
+      const ctx = Object.assign({ scope }, base, {
+        types: (state.catalog && state.catalog.types) || {},
+        panel: (opts) => extPanel(host, opts),
+        copy: sovx.copy, theme: sovx.theme, el, escapeHTML,
+      });
+      try { a.run(ctx); }
+      catch (e) { extPanel(host, { title: 'Extension error', body: `<pre>${escapeHTML(String((e && e.stack) || e))}</pre>` }); }
+    });
+    row.appendChild(b);
+  }
+  detail.appendChild(row);
+  detail.appendChild(host);
+}
+
+// extPanel renders an extension output panel using the dashboard's own styling.
+function extPanel(host, opts) {
+  opts = opts || {};
+  const p = el('div', 'ext-panel');
+  const head = el('div', 'ext-panel-head');
+  const t = el('span'); t.textContent = opts.title || 'output'; head.appendChild(t);
+  head.appendChild(el('span', 'spacer'));
+  if (opts.copyText !== undefined) head.appendChild(copyButton(() => opts.copyText));
+  p.appendChild(head);
+  const body = el('div', 'ext-panel-body');
+  if (opts.body instanceof Node) body.appendChild(opts.body);
+  else body.innerHTML = String(opts.body != null ? opts.body : '');
+  p.appendChild(body);
+  host.appendChild(p);
+  return p;
+}
 
 /* ---- theme ------------------------------------------------------------ */
 function initTheme() {
@@ -338,11 +483,14 @@ function renderMethodDetail(rd, md) {
     catch (e) { showErr('json parse error: ' + e.message); return; }
     const hdrs = { 'Content-Type': 'application/json' };
     for (const name in headerInputs) { const v = headerInputs[name].value; if (v !== '') hdrs[name] = v; }
+    // Let extensions mutate the outgoing request (inject auth, rewrite, etc.).
+    const reqObj = { path: md.postPath, headers: hdrs, body: JSON.stringify({ args }) };
+    for (const fn of sovx._requestHooks) { try { fn(reqObj); } catch (e) { console.error('sov: request hook failed', e); } }
     statusPill.hidden = true; timing.textContent = '';
     out.className = 'placeholder'; out.textContent = '// executing…';
     const t0 = performance.now();
     try {
-      const resp = await fetch(md.postPath, { method: 'POST', headers: hdrs, body: JSON.stringify({ args }) });
+      const resp = await fetch(reqObj.path, { method: 'POST', headers: reqObj.headers, body: reqObj.body });
       const txt = await resp.text();
       const ms = Math.round(performance.now() - t0);
       const pretty = prettyJSON(txt);
@@ -358,6 +506,8 @@ function renderMethodDetail(rd, md) {
 
   if (md.requestTypeScript) detail.appendChild(tsBlock('Request TypeScript', md.requestTypeScript));
   if (md.responseTypeScript) detail.appendChild(tsBlock('Response TypeScript', md.responseTypeScript));
+
+  renderActions(detail, 'method', { router: rd.router, method: md.method, descriptor: md });
 }
 
 function tsBlock(title, code) {
@@ -446,6 +596,7 @@ function renderTypeDetail(name) {
   detail.appendChild(sectionHead('Fields'));
   const table = el('div'); table.innerHTML = fieldsTableHTML(td.fields, { pos: true }); detail.appendChild(table.firstElementChild);
   renderUsedBy(detail, td.used_by || []);
+  renderActions(detail, 'type', { name: name, descriptor: td });
 }
 
 function sectionHead(text) {
@@ -611,6 +762,7 @@ function bindKeys() {
       else if (e.key === 'Enter') { e.preventDefault(); selectPalette(palette.active); }
       return;
     }
+    if (e.key === 'Escape') { closeSettings(); }
     if (e.key === '/' && !/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) {
       const s = $('.sb-search'); if (s) { e.preventDefault(); s.focus(); }
     }
@@ -621,6 +773,10 @@ function bindKeys() {
   if (overlay) overlay.addEventListener('click', ev => { if (ev.target.id === 'palette') closePalette(); });
   const opener = $('#palette-open');
   if (opener) opener.addEventListener('click', openPalette);
+  const setBtn = $('#settings-btn');
+  if (setBtn) setBtn.addEventListener('click', openSettings);
+  const setModal = $('#settings-modal');
+  if (setModal) setModal.addEventListener('click', ev => { if (ev.target.id === 'settings-modal') closeSettings(); });
 }
 
 /* ---- helpers ---------------------------------------------------------- */
