@@ -1,12 +1,15 @@
 // Package meshsecret ships the HMAC gate for /rpc/_register. Pods
 // joining the mesh sign their register POST with the same key the
-// registry was constructed with; mismatches and replays (>5 min) get
-// 401.
+// registry was constructed with; mismatches, stale timestamps (outside
+// the ±5 min skew window), and exact replays get 401.
 //
 //	gw.Use(meshsecret.New(meshsecret.Config{Secret: secret}))
 package meshsecret
 
 import (
+	"errors"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/Toyz/sov/gateway"
@@ -22,7 +25,19 @@ type Config struct {
 }
 
 // Plugin is the HMAC-gate plugin returned by New.
-type Plugin struct{ secret []byte }
+type Plugin struct {
+	secret []byte
+
+	// seen guards against exact replays inside the skew window. The HMAC
+	// signature is unique per (body, ts), so a byte-identical resend carries
+	// the same sig; we reject a sig already recorded. Entries map sig -> unix
+	// expiry (ts + SkewWindow, the last instant Verify would still accept that
+	// ts) and are swept lazily, bounding memory to the live window. Only a
+	// secret-holder can produce a sig that reaches this map (Verify runs
+	// first), so it is not an unauthenticated growth vector.
+	mu   sync.Mutex
+	seen map[string]int64
+}
 
 // New returns the meshsecret plugin from cfg.
 func New(cfgs ...Config) *Plugin {
@@ -33,7 +48,7 @@ func New(cfgs ...Config) *Plugin {
 	if len(cfgs) == 1 {
 		cfg = cfgs[0]
 	}
-	return &Plugin{secret: cfg.Secret}
+	return &Plugin{secret: cfg.Secret, seen: map[string]int64{}}
 }
 
 // Compile-time proof of the hooks this plugin binds — a signature
@@ -61,8 +76,9 @@ func (p *Plugin) ClaimedHeaders() []string {
 }
 
 // ParseHeaders intercepts /rpc/_register and verifies the
-// X-Sov-Register-Sig header against the request body. Other paths
-// pass through untouched.
+// X-Sov-Register-Sig header against the request body, then rejects an
+// exact replay of an already-seen signature. Other paths pass through
+// untouched.
 func (p *Plugin) ParseHeaders(req *gateway.Request) *rpc.Error {
 	if req.Path != "/rpc/_register" {
 		return nil
@@ -72,8 +88,40 @@ func (p *Plugin) ParseHeaders(req *gateway.Request) *rpc.Error {
 	}
 	sig := req.Header.Get(proto.RegisterSigHeader)
 	ts := req.Header.Get(proto.RegisterTsHeader)
-	if err := proto.Verify(p.secret, sig, ts, req.Body, time.Now()); err != nil {
+	now := time.Now()
+	if err := proto.Verify(p.secret, sig, ts, req.Body, now); err != nil {
 		return rpc.Unauthorized("_register: %v", err)
 	}
+	if err := p.markSeen(sig, ts, now); err != nil {
+		return rpc.Unauthorized("_register: %v", err)
+	}
+	return nil
+}
+
+// markSeen records sig as consumed and rejects a duplicate. ts is the
+// already-Verify-validated timestamp string; the sig is retained until
+// ts + SkewWindow, after which Verify's window check rejects that ts on
+// its own and the entry is safe to evict.
+func (p *Plugin) markSeen(sig, ts string, now time.Time) error {
+	tsInt, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return errors.New("invalid register timestamp")
+	}
+	expiry := tsInt + int64(proto.SkewWindow/time.Second)
+	nowUnix := now.UTC().Unix()
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Sweep expired sigs first — bounds the map to signatures still inside
+	// their replayable window.
+	for s, exp := range p.seen {
+		if exp <= nowUnix {
+			delete(p.seen, s)
+		}
+	}
+	if _, dup := p.seen[sig]; dup {
+		return errors.New("duplicate register signature (replay)")
+	}
+	p.seen[sig] = expiry
 	return nil
 }
