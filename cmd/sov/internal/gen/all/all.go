@@ -24,12 +24,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Toyz/sov/cmd/sov/internal/catalog"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/golang"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/kotlin"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/python"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/swift"
 	"github.com/Toyz/sov/cmd/sov/internal/gen/ts"
-	"github.com/Toyz/sov/cmd/sov/internal/catalog"
 	"github.com/Toyz/sov/gateway"
 )
 

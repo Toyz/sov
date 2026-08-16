@@ -14,14 +14,14 @@ import (
 type Reason string
 
 const (
-	ReasonMissingHeaders Reason = "MISSING_HEADERS"
-	ReasonBadTimestamp   Reason = "BAD_TIMESTAMP"
-	ReasonExpired        Reason = "TIMESTAMP_EXPIRED"
+	ReasonMissingHeaders  Reason = "MISSING_HEADERS"
+	ReasonBadTimestamp    Reason = "BAD_TIMESTAMP"
+	ReasonExpired         Reason = "TIMESTAMP_EXPIRED"
 	ReasonBadSignatureFmt Reason = "BAD_SIGNATURE_FORMAT"
-	ReasonSessionMissing Reason = "SESSION_EXPIRED"
-	ReasonSessionLookup  Reason = "SESSION_LOOKUP_FAILED"
-	ReasonBadPublicKey   Reason = "BAD_PUBLIC_KEY"
-	ReasonInvalidSig     Reason = "INVALID_SIGNATURE"
+	ReasonSessionMissing  Reason = "SESSION_EXPIRED"
+	ReasonSessionLookup   Reason = "SESSION_LOOKUP_FAILED"
+	ReasonBadPublicKey    Reason = "BAD_PUBLIC_KEY"
+	ReasonInvalidSig      Reason = "INVALID_SIGNATURE"
 )
 
 // Failure is the error type the Validator returns on any rejection.

@@ -63,9 +63,9 @@ func TestMCP_FederatedToolDiscoveryAndCall(t *testing.T) {
 	// node B: the tool service, exposed over HTTP.
 	gwB := gateway.New()
 	gwB.Register(&FederatedNoteRouter{})
-	gwB.MustUse(rpcsurface.New())        // B serves /rpc (A proxies business calls here)
-	gwB.MustUse(mcp.New(mcp.Config{}))   // tags B's tool routers in introspect
-	gwB.MustUse(introspect.New())        // opens B's public /rpc/_introspect for the fan-out
+	gwB.MustUse(rpcsurface.New())      // B serves /rpc (A proxies business calls here)
+	gwB.MustUse(mcp.New(mcp.Config{})) // tags B's tool routers in introspect
+	gwB.MustUse(introspect.New())      // opens B's public /rpc/_introspect for the fan-out
 	srvB := serveGateway(gwB)
 	defer srvB.Close()
 

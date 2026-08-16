@@ -269,10 +269,10 @@ func TestRun_GeneratorPolish(t *testing.T) {
 		}
 	}
 	for _, notWant := range []string{
-		"export interface Page {",  // model must NOT take the bare router name
-		"export interface node {",  // not lowercase
-		"tags?: unknown[]",         // primitive array must not be unknown[]
-		"kids?: unknown[]",         // struct array must not be unknown[]
+		"export interface Page {", // model must NOT take the bare router name
+		"export interface node {", // not lowercase
+		"tags?: unknown[]",        // primitive array must not be unknown[]
+		"kids?: unknown[]",        // struct array must not be unknown[]
 	} {
 		if strings.Contains(out, notWant) {
 			t.Errorf("unexpected %q in generated client:\n%s", notWant, out)

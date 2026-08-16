@@ -9,7 +9,7 @@
 // So node A serves BOTH surfaces, meshed:
 //   - /rpc/{service}/{method}  -> proxied to B          (RPC meshes)
 //   - /mcp tools/list          -> B's tools via the federated introspect catalog
-//                                                        (MCP discovery meshes)
+//     (MCP discovery meshes)
 //   - /mcp tools/call          -> routed to B via Dispatch (MCP dispatch meshes)
 //
 // None of this has MCP-specific mesh code: MCP rides the same Dispatch fabric
@@ -75,7 +75,7 @@ func main() {
 	gwB.Register(&Feed{FeedRouter: &feed.FeedRouter{Client: feed.NewClientAdapter(gwB.LocalClient())}})
 	gwB.MustUse(rpc.New())                                       // the /rpc surface — a builtin
 	gwB.MustUse(mcp.New(mcp.Config{ServerName: "chirp-node-b"})) // tags B's tool routers in introspect
-	gwB.MustUse(introspect.New())                               // exposes B's /rpc/_introspect for the fan-out
+	gwB.MustUse(introspect.New())                                // exposes B's /rpc/_introspect for the fan-out
 	go func() { log.Fatal(gwB.ListenAndServe(ctx, bAddr)) }()
 	waitReady("http://" + bAddr)
 

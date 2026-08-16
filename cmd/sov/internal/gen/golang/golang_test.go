@@ -192,9 +192,9 @@ func TestRun_ArrayOfStructFieldIsTyped(t *testing.T) {
 func TestRun_NullableIsPointer(t *testing.T) {
 	out := generate(t)
 	for _, want := range []string{
-		"Id string `json:\"id\"`",                    // present-always → plain
-		"Note string `json:\"note,omitempty\"`",      // omitempty → plain + tag
-		"Parent_id *string `json:\"parent_id\"`",     // nullable → pointer
+		"Id string `json:\"id\"`",                // present-always → plain
+		"Note string `json:\"note,omitempty\"`",  // omitempty → plain + tag
+		"Parent_id *string `json:\"parent_id\"`", // nullable → pointer
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in generated Go:\n%s", want, out)
