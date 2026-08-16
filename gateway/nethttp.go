@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -83,6 +84,16 @@ type NetHTTPOptions struct {
 	//     gateway sits behind a trusted L7 proxy / load balancer that
 	//     overwrites (not appends to) X-Forwarded-For with the real client IP.
 	TrustProxyHeaders bool
+	// TLSConfig, when set, makes the server serve HTTPS (ListenAndServeTLS)
+	// using its Certificates — the in-memory way to terminate TLS in-process
+	// (self-signed dev, or a cert loaded from a secret manager). Alternatively
+	// set CertFile/KeyFile to load from disk. Either one switches the server
+	// from plaintext to TLS.
+	TLSConfig *tls.Config
+	// CertFile / KeyFile are PEM paths; when CertFile is set the server serves
+	// HTTPS from them. Ignored when empty (unless TLSConfig is set).
+	CertFile string
+	KeyFile  string
 }
 
 // NewNetHTTPServer returns a Server backed by net/http.
@@ -119,9 +130,20 @@ func (s *NetHTTPServer) ListenAndServe(ctx context.Context, addr string) error {
 	}
 	srv.Addr = addr
 	srv.Handler = mux
+	if s.opts.TLSConfig != nil {
+		srv.TLSConfig = s.opts.TLSConfig
+	}
 
+	// Serve TLS when a TLSConfig (inline certs) or a cert/key file pair is
+	// configured — including a TLSConfig set on a caller-supplied HTTPServer,
+	// which http.Server.ListenAndServe would otherwise silently ignore
+	// (plaintext). ListenAndServeTLS("","") uses srv.TLSConfig.Certificates.
+	serveFn := srv.ListenAndServe
+	if srv.TLSConfig != nil || s.opts.CertFile != "" {
+		serveFn = func() error { return srv.ListenAndServeTLS(s.opts.CertFile, s.opts.KeyFile) }
+	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- serveFn() }()
 
 	select {
 	case <-ctx.Done():

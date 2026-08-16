@@ -81,9 +81,13 @@ you already run. Each has a seam.
   Any custom policy plugs into the same seam: a `HeaderParser` or `DispatchHook`
   plugin can count and reject by the subject and client IP Sov hands it.
 
-- **TLS termination.** Terminate at the proxy/ingress, or supply your own
-  `*http.Server` via `NetHTTPOptions.HTTPServer` with `TLSConfig` set. Sov does
-  not manage certificates.
+- **TLS termination.** Terminate at the proxy/ingress, or serve TLS in-process:
+  set `NetHTTPOptions.TLSConfig` (inline certs, e.g. from a secret manager) or
+  `NetHTTPOptions.CertFile`/`KeyFile` (PEM on disk); a `TLSConfig` set on a
+  supplied `HTTPServer` is also honored. Any of these switches the server from
+  plaintext to `ListenAndServeTLS`. Sov does not manage certificate issuance or
+  rotation-on-disk. Mesh pod-to-pod defaults to plaintext `http://` — front it
+  with mTLS at the transport (service mesh / sidecar) on an untrusted network.
 
 - **CSRF + CORS.** Sov auth is **bearer-token** (`Authorization: Bearer`), which
   is CSRF-immune: a browser does not attach a bearer to a cross-site request the
