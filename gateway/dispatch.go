@@ -432,7 +432,11 @@ func (g *Gateway) dispatchRemote(ctx context.Context, base, router, method strin
 			Message: fmt.Sprintf("proxy %s/%s: %v", router, method, err),
 		})
 	}
-	g.breakers.record(base, true)
+	// A 5xx from the upstream is an unhealthy signal too (panicking handler,
+	// dependency down, overload) — count it as a breaker failure so an
+	// up-but-broken pod trips the circuit, not just an unreachable one. 4xx is
+	// the caller's fault, not the upstream's health, so it counts as success.
+	g.breakers.record(base, resp.StatusCode < 500)
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
