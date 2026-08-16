@@ -48,6 +48,12 @@ func (s *NetHTTPServer) SetHeaderClaim(fn func(canonicalName string) bool) {
 type NetHTTPOptions struct {
 	// MaxBodyBytes caps the request body size. 0 → default 4 MiB.
 	MaxBodyBytes int64
+	// ReadTimeout bounds the TOTAL time to read a request (headers + body).
+	// 0 → default 30s. ReadHeaderTimeout alone only bounds the header phase, so
+	// without this a client that trickles the body arbitrarily slowly (a
+	// slowloris body variant) holds a goroutine + connection open indefinitely.
+	// Raise it if you accept large bodies over slow links.
+	ReadTimeout time.Duration
 	// HTTPServer, if set, is used verbatim and Addr/timeouts are
 	// honored. Otherwise the constructor builds a server with sensible
 	// defaults using ListenAndServe's addr.
@@ -71,6 +77,9 @@ func NewNetHTTPServer(opts NetHTTPOptions) *NetHTTPServer {
 	if opts.MaxBodyBytes == 0 {
 		opts.MaxBodyBytes = 4 << 20 // 4 MiB
 	}
+	if opts.ReadTimeout == 0 {
+		opts.ReadTimeout = 30 * time.Second
+	}
 	return &NetHTTPServer{opts: opts}
 }
 
@@ -90,6 +99,7 @@ func (s *NetHTTPServer) ListenAndServe(ctx context.Context, addr string) error {
 	if srv == nil {
 		srv = &http.Server{
 			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       s.opts.ReadTimeout,
 			WriteTimeout:      60 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		}
