@@ -70,6 +70,19 @@ type NetHTTPOptions struct {
 	//     them — pair with hmacseal/proto.Verify middleware to cryptographically
 	//     verify rather than trust the network alone).
 	TrustUpstreamClaims bool
+	// TrustProxyHeaders controls whether the client IP (Request.RemoteIP,
+	// stamped into audit events and re-forwarded as X-Forwarded-For to
+	// remotes) is read from the inbound X-Forwarded-For header.
+	//
+	//   false (default): use the transport-level peer address (r.RemoteAddr).
+	//     Correct for any gateway a client can reach directly — X-Forwarded-For
+	//     is attacker-controlled there, so trusting it lets a caller forge the
+	//     source IP in your audit trail and any IP-derived policy.
+	//
+	//   true: trust the left-most X-Forwarded-For hop. Set ONLY when the
+	//     gateway sits behind a trusted L7 proxy / load balancer that
+	//     overwrites (not appends to) X-Forwarded-For with the real client IP.
+	TrustProxyHeaders bool
 }
 
 // NewNetHTTPServer returns a Server backed by net/http.
@@ -161,7 +174,7 @@ func (s *NetHTTPServer) serve(w http.ResponseWriter, r *http.Request) {
 		Path:     r.URL.Path,
 		Header:   hdr,
 		Body:     body,
-		RemoteIP: remoteIPFromHTTP(r),
+		RemoteIP: remoteIPFromHTTP(r, s.opts.TrustProxyHeaders),
 	}
 
 	resp := s.handler(r.Context(), req)
@@ -243,12 +256,17 @@ func isIdentityHeader(canonical string) bool {
 	return false
 }
 
-func remoteIPFromHTTP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i > 0 {
-			return strings.TrimSpace(xff[:i])
+func remoteIPFromHTTP(r *http.Request, trustProxy bool) string {
+	// X-Forwarded-For is client-settable, so honor it only when the operator
+	// has vouched for an upstream proxy that rewrites it. Otherwise the socket
+	// peer is the only trustworthy source of the client IP.
+	if trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if i := strings.IndexByte(xff, ','); i > 0 {
+				return strings.TrimSpace(xff[:i])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

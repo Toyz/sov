@@ -103,7 +103,12 @@ func (p *AuditRouter) OnDispatch(ev gateway.DispatchEvent) error {
 	if len(p.ring) < p.size {
 		p.ring = append(p.ring, ev)
 	} else {
+		// Ring full: this write evicts the oldest retained event. Count it so
+		// the introspect "dropped" gauge reflects how many events have aged out
+		// of the in-memory window (0 forever otherwise, which reads as "nothing
+		// lost" when in fact the ring has been churning).
 		p.ring[p.cursor] = ev
+		p.dropped++
 	}
 	p.cursor = (p.cursor + 1) % p.size
 	p.mu.Unlock()
