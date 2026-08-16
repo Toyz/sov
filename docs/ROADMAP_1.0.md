@@ -75,7 +75,7 @@ policy. Verify with live examples, not just `go test`.
 - [x] **W4.2 TLS: fix broken escape hatch + real config** `[P1][M]` — `ListenAndServe` ignores
   a supplied `TLSConfig` (silently plaintext); add TLS via `ServeTLS`, `NetHTTPOptions.TLS`,
   mesh mTLS via proxy client `tls.Config`; correct SECURITY.md. (security P1-3)
-- [ ] **W4.3 HMAC key rotation** `[P1][M]` — `Secrets [][]byte`/kid; sign with primary, verify
+- [x] **W4.3 HMAC key rotation** `[P1][M]` — `Secrets [][]byte`/kid; sign with primary, verify
   against all active; make-before-break rollover for meshsecret/hmacseal/registertoken. (security P1-4)
 - [x] **W4.4 MCP tools/list gating** `[P2][S]` — optional `RequireAuthForList` so the perm map
   isn't anon-enumerable on an authed gateway. (security P2-7)
