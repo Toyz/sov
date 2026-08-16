@@ -90,6 +90,12 @@ type Options struct {
 	// Redis/memcached-backed impl to share auth-verify results across a
 	// fleet of gateway replicas. Default: per-replica in-memory.
 	ClaimsCache ClaimsCache
+	// AuthCacheTTL caps how long a verified bearer is trusted from the DEFAULT
+	// cache before re-verifying against the auth service — the bound on
+	// revocation lag (and the only bound for a token with no expiry). Default
+	// 5m when 0. Ignored when a custom ClaimsCache is supplied (that impl owns
+	// its own TTL). Set very large to effectively disable the cap.
+	AuthCacheTTL time.Duration
 	// RemoteBreaker tunes the per-upstream circuit breaker on remote
 	// dispatch (default: 5 consecutive failures → open, 10s cooldown). Set
 	// RemoteBreaker.Disabled to turn it off.
@@ -188,7 +194,11 @@ func New(opts ...Option) *Gateway {
 		o.ProxyClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	if o.ClaimsCache == nil {
-		o.ClaimsCache = newMemClaimsCache()
+		ttl := o.AuthCacheTTL
+		if ttl == 0 {
+			ttl = 5 * time.Minute
+		}
+		o.ClaimsCache = newMemClaimsCache(ttl)
 	}
 	g := &Gateway{
 		engine:        eng,

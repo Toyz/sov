@@ -165,32 +165,55 @@ type ClaimsCache interface {
 }
 
 // memClaimsCache is the default in-memory ClaimsCache. Token is used only
-// as a map key, never logged.
+// as a map key, never logged. Beyond honoring claims.ExpiresAt, it caps every
+// entry at ttl so a verified identity is re-checked against the auth service at
+// least that often — bounding how long a revoked token (or a token with no
+// expiry at all) can be served from cache.
 type memClaimsCache struct {
 	mu      sync.Mutex
-	entries map[string]*Claims
+	entries map[string]cachedClaims
+	ttl     time.Duration
+	now     func() time.Time
 }
 
-func newMemClaimsCache() *memClaimsCache { return &memClaimsCache{entries: map[string]*Claims{}} }
+type cachedClaims struct {
+	cl *Claims
+	at time.Time
+}
+
+func newMemClaimsCache(ttl time.Duration) *memClaimsCache {
+	return &memClaimsCache{
+		entries: map[string]cachedClaims{},
+		ttl:     ttl,
+		now:     func() time.Time { return time.Now().UTC() },
+	}
+}
 
 func (c *memClaimsCache) Get(token string) (*Claims, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	cl, ok := c.entries[token]
+	e, ok := c.entries[token]
 	if !ok {
 		return nil, false
 	}
-	if !cl.ExpiresAt.IsZero() && time.Now().UTC().After(cl.ExpiresAt) {
+	now := c.now()
+	// Max-age cap: re-verify at least every ttl, so revocation propagates within
+	// that window even for a long-lived or non-expiring token.
+	if c.ttl > 0 && now.Sub(e.at) > c.ttl {
 		delete(c.entries, token)
 		return nil, false
 	}
-	return cl, true
+	if !e.cl.ExpiresAt.IsZero() && now.After(e.cl.ExpiresAt) {
+		delete(c.entries, token)
+		return nil, false
+	}
+	return e.cl, true
 }
 
 func (c *memClaimsCache) Put(token string, cl *Claims) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[token] = cl
+	c.entries[token] = cachedClaims{cl: cl, at: c.now()}
 }
 
 // verifyToken calls the configured AuthService.{verify} via the
