@@ -4,11 +4,21 @@ export type ErrorCode =
   | "CONFLICT" | "INTERNAL" | "NOT_IMPLEMENTED" | "RATE_LIMITED"
   | "ROLE_CONFLICT" | "INVALID_SEAL";
 
+export interface FieldError {
+  field: string;
+  code?: string;
+  message: string;
+}
+
 export interface SovError extends Error {
   message: string;
   code?: ErrorCode;
   error_code?: string;
   status: number;
+  retryable?: boolean;      // safe to retry (transient) — key retry logic on this
+  retry_after?: number;     // seconds to wait before retrying, when provided
+  details?: FieldError[];   // per-field failures for a validation error
+  requestId?: string;       // X-Sov-Request-Id off the response, for log correlation
 }
 
 // ---- Runtime client --------------------------------------------------------
@@ -18,6 +28,7 @@ export interface SovClientOptions {
   fetch?: typeof fetch;                       // injectable for tests / SSR
   wireShape?: "named" | "positional";         // default "named"
   headers?: Record<string, string>;            // extra per-call headers
+  timeoutMs?: number;                          // per-call timeout; default 30000, 0 = none
 }
 
 // ---- Batch -----------------------------------------------------------------
@@ -195,11 +206,21 @@ export class SovClient {
     if (this.opts.token) {
       headers["Authorization"] = `Bearer ${this.opts.token}`;
     }
-    const resp = await f(`${this.opts.baseURL}/rpc/${router}/${method}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ args }),
-    });
+    const timeoutMs = this.opts.timeoutMs ?? 30000;
+    const ctrl = timeoutMs > 0 ? new AbortController() : undefined;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
+    let resp: Response;
+    try {
+      resp = await f(`${this.opts.baseURL}/rpc/${router}/${method}`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ args }),
+        signal: ctrl?.signal,
+      });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+    const requestId = resp.headers.get("X-Sov-Request-Id") ?? undefined;
     const text = await resp.text();
     const parsed = text ? JSON.parse(text) : {};
     if (resp.status >= 400) {
@@ -208,6 +229,10 @@ export class SovClient {
       err.code = e.code as ErrorCode | undefined;
       err.error_code = e.error_code;
       err.status = resp.status;
+      err.retryable = e.retryable;
+      err.retry_after = e.retry_after;
+      err.details = e.details;
+      err.requestId = requestId;
       throw err;
     }
     return parsed.data as T;
