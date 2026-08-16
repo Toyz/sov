@@ -62,10 +62,10 @@ policy. Verify with live examples, not just `go test`.
   (`requestid` is the template); set event trace fields (W0.1). (obs #2)
 - [x] **W3.3 accesslog builtin** `[P0][S-M]` — one structured line per DispatchEvent with
   request-id; nothing logs on the dispatch path today. (obs #3)
-- [ ] **W3.4 pprof/debug builtin** `[P1][S]` — opt-in, auth-gated `net/http/pprof`. (obs #4)
+- [x] **W3.4 pprof/debug builtin** `[P1][S]` — opt-in, auth-gated `net/http/pprof`. (obs #4)
 - [x] **W3.5 build-info on the wire** `[P1][S]` — `debug.ReadBuildInfo` → manifest + a
   `build_info` gauge. (obs #5)
-- [ ] **W3.6 metric gaps** `[P1][S-M]` — in-flight gauge, `sov_upstream_breaker_state` gauge,
+- [x] **W3.6 metric gaps** `[P1][S-M]` — in-flight gauge, `sov_upstream_breaker_state` gauge,
   go-runtime metrics. (obs #6)
 - [ ] **W3.7 runtime config dump** `[P2][S]` — opt-in `/rpc/_config` (sanitized). (obs #7)
 
@@ -77,9 +77,9 @@ policy. Verify with live examples, not just `go test`.
   mesh mTLS via proxy client `tls.Config`; correct SECURITY.md. (security P1-3)
 - [ ] **W4.3 HMAC key rotation** `[P1][M]` — `Secrets [][]byte`/kid; sign with primary, verify
   against all active; make-before-break rollover for meshsecret/hmacseal/registertoken. (security P1-4)
-- [ ] **W4.4 MCP tools/list gating** `[P2][S]` — optional `RequireAuthForList` so the perm map
+- [x] **W4.4 MCP tools/list gating** `[P2][S]` — optional `RequireAuthForList` so the perm map
   isn't anon-enumerable on an authed gateway. (security P2-7)
-- [ ] **W4.5 CORS default + CSRF stance** `[P2][S]` — flip zero-value CORS to same-origin;
+- [x] **W4.5 CORS default + CSRF stance** `[P2][S]` — flip zero-value CORS to same-origin;
   document bearer=CSRF-immune, cookie-auth=consumer-owned; optional Origin-check. (security P2-5)
 
 ## Wave 5 — DX / testing / docs / release
