@@ -374,6 +374,10 @@ type methodEntry struct {
 	// Describe and into CheckParams.Perm so the requirement rides next to
 	// the handler instead of a parallel service→requirement map.
 	perm string
+	// deprecated / deprecatedReason come from a `deprecated[=reason]` directive
+	// on the blank `_` sentinel; carried into Describe for introspect/OpenAPI.
+	deprecated       bool
+	deprecatedReason string
 	// invoke, when non-nil, is a typed dispatch closure built at boot by
 	// rpc.Handle. Dispatch calls it directly instead of the reflect path —
 	// no reflect.Value.Call, no reflect.New. Nil for reflectively-
@@ -655,6 +659,8 @@ func buildEntry(typeName string, rv reflect.Value, m reflect.Method) *methodEntr
 		entry.internal = fm.Internal
 		entry.internalHard = fm.InternalHard
 		entry.perm = fm.Perm
+		entry.deprecated = fm.Deprecated
+		entry.deprecatedReason = fm.DeprecatedReason
 	}
 
 	numOut := mt.NumOut()

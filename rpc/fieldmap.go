@@ -44,6 +44,12 @@ type FieldMap struct {
 	// parses the string. Empty when undeclared. Declaring it more than once
 	// on the sentinel is a build error.
 	Perm string
+	// Deprecated marks the method (via `deprecated` or `deprecated=<reason>` on
+	// the blank `_` sentinel) as deprecated. Surfaces in introspect, the OpenAPI
+	// spec, and generated-client doc comments. DeprecatedReason is the optional
+	// human note (e.g. "use Foo.bar instead"); empty when just `deprecated`.
+	Deprecated       bool
+	DeprecatedReason string
 
 	// HeaderFields lists indices into Fields that bind from a request header
 	// (FieldInfo.HeaderSource != ""), so dispatch binds them in one pass
@@ -232,8 +238,13 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 							return nil, fmt.Errorf("%s: blank `_` field sov tag declares perm= more than once", t.Name())
 						}
 						fm.Perm = val
+					case tok == "deprecated":
+						fm.Deprecated = true
+					case strings.HasPrefix(tok, "deprecated="):
+						fm.Deprecated = true
+						fm.DeprecatedReason = unquoteSovValue(tok[len("deprecated="):])
 					default:
-						return nil, fmt.Errorf("%s: blank `_` field sov tag has unknown directive %q (allowed: internal, hard, perm=…)", t.Name(), tok)
+						return nil, fmt.Errorf("%s: blank `_` field sov tag has unknown directive %q (allowed: internal, hard, perm=…, deprecated[=reason])", t.Name(), tok)
 					}
 				}
 				if fm.InternalHard && !sawInternal {

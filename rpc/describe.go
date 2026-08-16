@@ -32,10 +32,12 @@ func (e *Engine) Describe() []RouterDescriptor {
 		for _, w := range names {
 			ent := methods[w]
 			md := MethodDescriptor{
-				Method:   ent.wireName,
-				Title:    OperationTitle(ent.goName),
-				PostPath: fmt.Sprintf("/rpc/%s/%s", routerName, ent.wireName),
-				Perm:     ent.perm,
+				Method:           ent.wireName,
+				Title:            OperationTitle(ent.goName),
+				PostPath:         fmt.Sprintf("/rpc/%s/%s", routerName, ent.wireName),
+				Perm:             ent.perm,
+				Deprecated:       ent.deprecated,
+				DeprecatedReason: ent.deprecatedReason,
 			}
 			// Visibility: marker-method (router-wide) OR sov sentinel
 			// (per-method) declarations both feed the flags; hard wins.

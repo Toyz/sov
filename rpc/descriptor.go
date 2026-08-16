@@ -77,6 +77,10 @@ type MethodDescriptor struct {
 	// requires X" without re-reading struct tags. Empty when undeclared.
 	// Discovery only — the AuthzService, not this field, gates access.
 	Perm string `json:"perm,omitempty"`
+	// Deprecated marks the method deprecated (a `deprecated[=reason]` sentinel).
+	// Surfaced to introspect / OpenAPI / codegen. DeprecatedReason is optional.
+	Deprecated       bool   `json:"deprecated,omitempty"`
+	DeprecatedReason string `json:"deprecatedReason,omitempty"`
 	// Internal marks a SOFT-hidden method: omitted from the default
 	// introspect report, but present (with this flag set) in the full
 	// payload served under the X-Sov-Introspect-Internal header so the

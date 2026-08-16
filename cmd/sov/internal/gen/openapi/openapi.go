@@ -86,6 +86,12 @@ func buildOperation(rt rpc.RouterDescriptor, m rpc.MethodDescriptor) map[string]
 	if m.Title != "" {
 		op["summary"] = m.Title
 	}
+	if m.Deprecated {
+		op["deprecated"] = true
+		if m.DeprecatedReason != "" {
+			op["description"] = "Deprecated: " + m.DeprecatedReason
+		}
+	}
 
 	var headerParams []any
 	var bodyFields []rpc.ParamField
