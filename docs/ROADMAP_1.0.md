@@ -70,7 +70,7 @@ policy. Verify with live examples, not just `go test`.
 - [ ] **W3.7 runtime config dump** `[P2][S]` — opt-in `/rpc/_config` (sanitized). (obs #7)
 
 ## Wave 4 — security depth
-- [ ] **W4.1 Token cache TTL + revocation seam** `[P0][M]` — cap verify-cache lifetime
+- [x] **W4.1 Token cache TTL + revocation seam** `[P0][M]` — cap verify-cache lifetime
   independent of token expiry; refuse/warn on no-expiry tokens; `Revoked(token)` seam. (security P0-2)
 - [x] **W4.2 TLS: fix broken escape hatch + real config** `[P1][M]` — `ListenAndServe` ignores
   a supplied `TLSConfig` (silently plaintext); add TLS via `ServeTLS`, `NetHTTPOptions.TLS`,
@@ -103,7 +103,7 @@ policy. Verify with live examples, not just `go test`.
   CI fails on breaking delta) reusing `ShapeHash`. (DX P1-8)
 - [x] **W5.9 Scaffold tests + CI + Dockerfiles** `[P1][S-M]` — `sov init` ships no `_test.go`,
   no CI; monolith/hybrid have no Dockerfile. (DX P1-9)
-- [ ] **W5.10 Hygiene docs** `[P2][S]` — CONTRIBUTING, ADR index, getting-started matching
+- [x] **W5.10 Hygiene docs** `[P2][S]` — CONTRIBUTING, ADR index, getting-started matching
   current API (three different "expose a router" patterns today). (DX #10)
 
 ## Judgment calls to confirm (don't sink L-effort blind)
