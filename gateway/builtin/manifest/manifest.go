@@ -76,8 +76,8 @@ func (p *Plugin) Apply(g *gateway.Gateway) error { p.gw = g; return nil }
 // RoutePatterns claims /rpc/_manifest.
 func (p *Plugin) RoutePatterns() []string { return []string{"/rpc/_manifest"} }
 
-// ManifestReport is the JSON-marshalled body of /rpc/_manifest.
-type ManifestReport struct {
+// Report is the JSON-marshalled body of /rpc/_manifest.
+type Report struct {
 	Services        []string              `json:"services"`
 	Plugins         []gateway.PluginInfo  `json:"plugins"`
 	Auth            *gateway.AuthBinding  `json:"auth,omitempty"`
@@ -100,7 +100,7 @@ func (p *Plugin) ServeRoute(_ context.Context, req *gateway.Request) *gateway.Re
 			Body:   []byte(`{"error":{"code":"UNAUTHORIZED","message":"authentication required for the manifest (set manifest Public:true to allow anonymous access)"}}`),
 		}
 	}
-	rpt := ManifestReport{
+	rpt := Report{
 		Plugins: p.gw.PluginInfos(),
 	}
 	if res := p.gw.Resolver(); res != nil {

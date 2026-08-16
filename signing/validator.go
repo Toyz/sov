@@ -56,8 +56,14 @@ type Validator struct {
 	now          func() time.Time
 }
 
-// New returns a Validator. Store is mandatory.
+// New returns a Validator. Store is mandatory — New panics if it is nil,
+// because a Validator with no key store can never resolve a session's public
+// key and would reject (or nil-deref on) every request. Failing at
+// construction turns a latent runtime fault into a loud boot-time one.
 func New(opts Options) *Validator {
+	if opts.Store == nil {
+		panic("signing.New: Store is required")
+	}
 	if opts.ReplayWindow <= 0 {
 		opts.ReplayWindow = 30 * time.Second
 	}

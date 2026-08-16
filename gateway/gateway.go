@@ -146,6 +146,10 @@ func WithMiddleware(mw ...Middleware) Option {
 // gateway.New() returns a usable standalone gateway with sensible
 // defaults. The gateway always owns its rpc.Engine internally; reach
 // it via g.Engine() only for power-user escape hatches.
+//
+// New panics on an Option carrying config it cannot honor — e.g.
+// WithAdvertiseURL with an unparseable URL — so a misconfigured gateway
+// fails loudly at construction rather than silently mis-routing later.
 func New(opts ...Option) *Gateway {
 	o := &Options{}
 	for _, fn := range opts {

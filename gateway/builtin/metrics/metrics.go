@@ -29,13 +29,13 @@ import (
 	"github.com/Toyz/sov/gateway"
 )
 
-// Snapshot is the capability shape published as "metrics.Snapshot".
+// SnapshotFunc is the capability shape published as "metrics.Snapshot".
 // Callers (audit dashboards, healthchecks, other plugins) read live
 // counters in-process without scraping /metrics.
-type Snapshot = func() *MetricsSnapshot
+type SnapshotFunc = func() *Snapshot
 
-// MetricsSnapshot is a point-in-time copy of every counter + histogram.
-type MetricsSnapshot struct {
+// Snapshot is a point-in-time copy of every counter + histogram.
+type Snapshot struct {
 	Counters   map[string]uint64
 	Histograms map[string][]float64 // sorted bucket upper bounds → counts
 	At         time.Time
@@ -128,7 +128,7 @@ func (p *Plugin) After() []string { return nil }
 // Capabilities publishes metrics.Snapshot.
 func (p *Plugin) Capabilities() []gateway.Capability {
 	return []gateway.Capability{
-		{Type: "metrics.Snapshot", Impl: Snapshot(p.snapshot)},
+		{Type: "metrics.Snapshot", Impl: SnapshotFunc(p.snapshot)},
 	}
 }
 
@@ -264,7 +264,7 @@ func (p *Plugin) maybeLogOverflow() {
 	})
 }
 
-func (p *Plugin) snapshot() *MetricsSnapshot {
+func (p *Plugin) snapshot() *Snapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	c := make(map[string]uint64, len(p.counter))
@@ -279,7 +279,7 @@ func (p *Plugin) snapshot() *MetricsSnapshot {
 		}
 		h[k] = row
 	}
-	return &MetricsSnapshot{Counters: c, Histograms: h, At: time.Now()}
+	return &Snapshot{Counters: c, Histograms: h, At: time.Now()}
 }
 
 func sortedKeys[V any](m map[string]V) []string {

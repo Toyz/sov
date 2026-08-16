@@ -100,7 +100,7 @@ func TestMetrics_SnapshotCapability(t *testing.T) {
 		})
 	}
 
-	snap, ok := gateway.GetCapability[metrics.Snapshot](gw, "metrics.Snapshot")
+	snap, ok := gateway.GetCapability[metrics.SnapshotFunc](gw, "metrics.Snapshot")
 	if !ok {
 		t.Fatal("metrics.Snapshot capability not published")
 	}

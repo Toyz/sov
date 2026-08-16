@@ -41,7 +41,9 @@ var (
 	_ gateway.MeshConflictPolicy = (*Plugin)(nil)
 )
 
-// New returns a federation-preemption plugin from cfg.
+// New returns a federation-preemption plugin from cfg. It panics if more
+// than one Config is passed, or if a preemption rule in Config is malformed —
+// invalid config surfaces at construction, not mid-request.
 func New(cfgs ...Config) *Plugin {
 	if len(cfgs) > 1 {
 		panic("preempt.New: at most one Config")
