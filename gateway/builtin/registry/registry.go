@@ -291,26 +291,19 @@ func (p *Plugin) serveRegister(ctx context.Context, req *gateway.Request) *gatew
 			})
 		}
 	}
-	usedPreemption := false
-	if existing, ok := p.gw.Resolver().Resolve(ctx, rr.Name); ok {
-		existingCanon, _ := gateway.NormalizeUpstreamURL(existing.RemoteAddr)
-		if existingCanon != canonAddr {
-			if !p.gw.PreemptFederation(rr.Name, existingCanon, canonAddr) {
-				return gateway.ErrorResponse(&rpc.Error{
-					Status: 409, Code: "SERVICE_CONFLICT",
-					Message: "_register: " + rr.Name + " already registered at " + existingCanon,
-				})
-			}
-			usedPreemption = true
-		}
-	}
-
+	// A second address for the same service is a REPLICA, not a conflict
+	// (W1.1): the resolver round-robins across all live replicas and skips any
+	// whose breaker is open, giving mesh services HA + failover. Admission to
+	// /rpc/_register is already gated (meshsecret/token), so a pod that can add
+	// a replica is exactly as trusted as one registering a new service —
+	// replicas grant no new privilege. Auth/authz role single-ownership is
+	// enforced above via ROLE_CONFLICT and is unaffected: replicas share the
+	// service name, never a new role binding.
 	forceIntrospect := p.gw.PluginByName("explorer") != nil
 	introspectable := rr.Introspect || forceIntrospect
-	reg.PutEntry(rr.Name, rr.Address, ttl, gateway.EntryOptions{Introspectable: introspectable})
-	if usedPreemption {
-		p.gw.ConsumeFederationPreemption(rr.Name)
-	}
+	// Key replicas by the CANONICAL address so equivalent URLs dedup to one
+	// replica and deregister (which deletes by canonAddr) always matches.
+	reg.PutEntry(rr.Name, canonAddr, ttl, gateway.EntryOptions{Introspectable: introspectable})
 
 	if rr.Auth {
 		method := rr.Verify
@@ -349,15 +342,10 @@ func (p *Plugin) serveDeregister(ctx context.Context, rr *gateway.RegisterReques
 		if svc == "" || strings.HasPrefix(svc, "_") {
 			continue
 		}
-		existing, ok := p.gw.Resolver().Resolve(ctx, svc)
-		if !ok {
-			continue
-		}
-		existingCanon, _ := gateway.NormalizeUpstreamURL(existing.RemoteAddr)
-		if existingCanon != canonAddr {
-			continue // a different pod owns this service now — leave it
-		}
-		reg.Delete(svc)
+		// Remove ONLY this caller's own replica. Delete is keyed by
+		// (service, address), so sibling replicas — and any newer pod that has
+		// since taken the name — are untouched. Idempotent if already gone.
+		reg.Delete(svc, canonAddr)
 	}
 	body, _ := json.Marshal(rpc.SuccessResponse{Data: gateway.RegisterResponse{OK: true}})
 	return &gateway.Response{Status: 200, Body: body}
@@ -370,7 +358,7 @@ func (p *Plugin) serveFederated(ctx context.Context, rr *gateway.RegisterRequest
 	if len(rr.Services) == 0 {
 		return gateway.ErrorResponse(rpc.BadRequest("federate=true requires non-empty services list"))
 	}
-	preempted := map[string]bool{}
+	preemptedFrom := map[string]string{}
 	for _, svc := range rr.Services {
 		if svc == "" || strings.HasPrefix(svc, "_") {
 			return gateway.ErrorResponse(rpc.BadRequest("invalid federated service name %q", svc))
@@ -391,7 +379,7 @@ func (p *Plugin) serveFederated(ctx context.Context, rr *gateway.RegisterRequest
 							"; register builtin/preempt plugin to allow takeover",
 					})
 				}
-				preempted[svc] = true
+				preemptedFrom[svc] = existing.RemoteAddr
 			}
 		}
 	}
@@ -399,8 +387,15 @@ func (p *Plugin) serveFederated(ctx context.Context, rr *gateway.RegisterRequest
 	forceIntrospect := p.gw.PluginByName("explorer") != nil
 	introspectable := rr.Introspect || forceIntrospect
 	for _, svc := range rr.Services {
-		reg.PutEntry(svc, rr.Address, ttl, gateway.EntryOptions{Introspectable: introspectable})
-		if preempted[svc] {
+		// Federation stays single-owner: a preemptive takeover REPLACES the old
+		// front rather than adding a replica, so drop the preempted address
+		// first. (Direct service registration allows replicas; federated
+		// fronting does not in v1 — see the W1.1 roadmap note.)
+		if old, ok := preemptedFrom[svc]; ok {
+			reg.Delete(svc, old)
+		}
+		reg.PutEntry(svc, canonAddr, ttl, gateway.EntryOptions{Introspectable: introspectable})
+		if _, ok := preemptedFrom[svc]; ok {
 			p.gw.ConsumeFederationPreemption(svc)
 		}
 	}

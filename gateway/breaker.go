@@ -91,6 +91,31 @@ func (m *breakerManager) allow(addr string) bool {
 	}
 }
 
+// isOpen reports whether addr's breaker is currently rejecting traffic — used
+// by the resolver to skip a tripped replica when picking one. Unlike allow it
+// is NON-MUTATING (it never advances an elapsed breaker to half-open): an open
+// breaker whose cooldown has elapsed is reported NOT open, so the resolver
+// leaves the replica eligible and the dispatch-path allow() owns the probe.
+func (m *breakerManager) isOpen(addr string) bool {
+	if m.disabled {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b := m.buckets[addr]
+	if b == nil {
+		return false
+	}
+	switch b.state {
+	case breakerOpen:
+		return m.now().Sub(b.openedAt) < m.cooldown
+	case breakerHalfOpen:
+		return true // a probe is already in flight; steer new traffic elsewhere
+	default:
+		return false
+	}
+}
+
 // record folds the outcome of a remote call into addr's breaker. A success
 // closes it and clears the failure count; a failure increments it and trips
 // the breaker open at the threshold (or immediately when a half-open probe

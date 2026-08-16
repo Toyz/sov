@@ -28,8 +28,31 @@ examples, not just unit tests.
 - **Request.RawQuery**; MCP `tools/list` auth gate; scaffold ships tests + CI +
   Dockerfiles.
 - Docs: `SECURITY.md`, `VERSIONING.md`, `ROADMAP_1.0.md`.
+- **Multi-endpoint replicas** — a second pod registering an existing service name
+  is now a load-balanced **replica** (default round-robin, breaker-aware — an open
+  replica is skipped, all-open falls back), not a 409. Gives mesh services HA +
+  failover. Pluggable `EndpointPicker` (`WithEndpointPicker`) for custom strategies.
+- **Load shedding** — `WithMaxInFlight(n)` sheds past N concurrent requests with a
+  retryable `503 OVERLOADED`. Adds the previously-missing `WithRemoteBreaker`,
+  `WithAuthCacheTTL`, and `WithMaxInFlight` option setters.
+- **Per-call deadline budget** (`deadline` builtin; `X-Sov-Deadline` shared across a
+  mesh chain), **W3C traceparent** propagation (`tracing` builtin), and
+  **Idempotency-Key** replay (`idempotency` builtin) — all with pluggable stores.
+- **Pagination** primitives (`rpc.Page[T]` / `PageParams`); field **constraints**
+  (`maxlen`), inbound JSON **depth cap**, and an **error taxonomy**
+  (`retryable` / `retry_after` / per-field `details`).
+- **Opt-in `/rpc/_config`** — sanitized runtime-config dump (`configdump` builtin).
+- Generated **TypeScript client**: per-call timeout, `X-Sov-Request-Id` capture,
+  and the retry signal — parity with the Go/Python/Swift/Kotlin clients.
 
 ### Changed
+- **BREAKING (`RegisterStore`)** — the pluggable registry store now holds replicas:
+  `Delete(service, address string)` (was `Delete(service)`),
+  `Snapshot() map[string][]RegisterEntry` (was `map[string]RegisterEntry`), and
+  `Put` upserts by `(service, entry.Address)`. Custom stores (e.g. Redis) must
+  update; the in-memory default, the `/rpc/_register` wire contract, and the
+  `Resolve`/`PutEntry` signatures are unchanged. Entries are keyed by the
+  canonical address, so equivalent URLs dedup to one replica.
 - Auth/authz **denials are now recorded** as dispatch events (audit + metrics
   previously blind to 401/403 on the /rpc surface).
 - All builtin constructors are variadic `New(...Config)`; `cmd/sov` subcommands

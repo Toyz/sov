@@ -249,6 +249,10 @@ func New(opts ...Option) *Gateway {
 	// honored.
 	eng.SetLogger(engineLogger{g: g})
 	g.register.onChange = g.invalidateCatalog
+	// Let the resolver skip replicas whose breaker is open when picking one
+	// (W1.1). Non-mutating read; the dispatch path still owns the half-open
+	// probe. Safe even when the breaker is disabled — isOpen returns false.
+	g.register.breakerOpen = g.breakers.isOpen
 	if o.AdvertiseURL != "" {
 		canon, err := NormalizeUpstreamURL(o.AdvertiseURL)
 		if err != nil {
