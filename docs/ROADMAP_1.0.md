@@ -92,7 +92,7 @@ policy. Verify with live examples, not just `go test`.
 - [x] **W2.6 Method-level deprecation + Sunset** `[P1][S-M]` — `deprecated[=reason]` on the
   method sentinel; `MethodDescriptor.Deprecated`; emit to introspect/OpenAPI/codegen +
   optional `Sunset` header. (protocol #6)
-- [ ] **W2.7 First-class server-streaming RPC + codegen** `[P1][L]` — DECISION NEEDED: promote
+- [x] **W2.7 First-class server-streaming RPC + codegen** `[P1][L]` — DECISION NEEDED: promote
   streaming to a return kind `buildEntry` recognizes + codegen NDJSON consumers, or keep it
   surface-only. Bidi = explicit non-goal. (protocol #7)
 
