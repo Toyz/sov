@@ -307,7 +307,12 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 					}
 				}
 			} else {
-				// parts[0] = name (optional), parts[1] = position (optional), parts[2:] = flags
+				// parts[0] = name (optional). parts[1:] = [optional position][flags…]:
+				// the position is an optional LEADING INTEGER; a non-integer token
+				// there is a flag, so `name,required` and `name,title=x` work with no
+				// position slot, and `name,,flags` explicitly skips the position.
+				// (Being strict here was a footgun — it rejected these natural forms
+				// and even sov's own rpc.PageParams tags.)
 				if parts[0] != "" {
 					if !snakeIdent.MatchString(parts[0]) {
 						return nil, fmt.Errorf("field %s.%s: sov tag name %q is not a valid snake_case identifier", t.Name(), sf.Name, parts[0])
@@ -315,28 +320,31 @@ func BuildFieldMap(t reflect.Type) (*FieldMap, error) {
 					info.WireName = parts[0]
 					explicitName = true
 				}
-				if len(parts) >= 2 && parts[1] != "" {
-					p, err := strconv.Atoi(parts[1])
-					if err != nil {
-						return nil, fmt.Errorf("field %s.%s: sov tag position %q is not an integer: %w", t.Name(), sf.Name, parts[1], err)
+				rest := parts[1:]
+				if len(rest) > 0 {
+					if rest[0] == "" {
+						rest = rest[1:] // explicit empty position slot (the `,,` form)
+					} else if p, err := strconv.Atoi(rest[0]); err == nil {
+						if p < 0 {
+							return nil, fmt.Errorf("field %s.%s: sov tag position %d must be >= 0", t.Name(), sf.Name, p)
+						}
+						// Reject an absurd position at parse time — before it sizes the
+						// ByPos slot array (make([]int, MaxPos+1)) into a multi-terabyte
+						// allocation that OOM-crashes Register on a typo'd/hostile tag
+						// like `name,99999999999`. The cap is far above any real struct
+						// (no method has 64k positional args), so legitimate gaps still
+						// reach the "must be contiguous" check below.
+						if p > maxPositionalSlot {
+							return nil, fmt.Errorf("field %s.%s: sov tag position %d exceeds the maximum of %d", t.Name(), sf.Name, p, maxPositionalSlot)
+						}
+						info.Position = p
+						explicitPos = true
+						rest = rest[1:]
 					}
-					if p < 0 {
-						return nil, fmt.Errorf("field %s.%s: sov tag position %d must be >= 0", t.Name(), sf.Name, p)
-					}
-					// Reject an absurd position at parse time — before it sizes the
-					// ByPos slot array (make([]int, MaxPos+1)) into a multi-terabyte
-					// allocation that OOM-crashes Register on a typo'd/hostile tag
-					// like `name,99999999999`. The cap is far above any real struct
-					// (no method has 64k positional args), so legitimate gaps still
-					// reach the "must be contiguous" check below.
-					if p > maxPositionalSlot {
-						return nil, fmt.Errorf("field %s.%s: sov tag position %d exceeds the maximum of %d", t.Name(), sf.Name, p, maxPositionalSlot)
-					}
-					info.Position = p
-					explicitPos = true
+					// else: rest[0] is a flag/kv — leave it for applyFieldFlags.
 				}
-				if len(parts) > 2 {
-					if err := applyFieldFlags(&info, parts[2:], t, sf); err != nil {
+				if len(rest) > 0 {
+					if err := applyFieldFlags(&info, rest, t, sf); err != nil {
 						return nil, err
 					}
 				}
