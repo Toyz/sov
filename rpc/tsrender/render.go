@@ -37,7 +37,7 @@ func RenderDecl(name string, t reflect.Type) string {
 	if t == nil {
 		return fmt.Sprintf("export type %s = unknown;", name)
 	}
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
@@ -45,12 +45,17 @@ func RenderDecl(name string, t reflect.Type) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "export interface %s {\n", name)
+	// Seed the cycle guard with t itself so a field that refers back to this
+	// type (a self-referential struct) renders as the bare name rather than
+	// re-expanding — e.g. `type Node struct { Children []*Node }` →
+	// `children?: Node[]`, not infinite recursion.
+	seen := map[reflect.Type]bool{t: true}
 	for _, f := range structFields(t) {
 		marker := ""
 		if f.Optional {
 			marker = "?"
 		}
-		fmt.Fprintf(&b, "  %s%s: %s;\n", f.Name, marker, render(f.Type))
+		fmt.Fprintf(&b, "  %s%s: %s;\n", f.Name, marker, renderSeen(f.Type, seen))
 	}
 	b.WriteString("}")
 	return b.String()
@@ -84,7 +89,7 @@ func collect(t reflect.Type, seen map[string]bool, out *[]TypeDecl) {
 		return
 	}
 	switch t.Kind() {
-	case reflect.Ptr, reflect.Slice, reflect.Array:
+	case reflect.Pointer, reflect.Slice, reflect.Array:
 		collect(t.Elem(), seen, out)
 		return
 	case reflect.Map:
@@ -97,7 +102,15 @@ func collect(t reflect.Type, seen map[string]bool, out *[]TypeDecl) {
 		if t.PkgPath() == "time" && t.Name() == "Time" {
 			return
 		}
-		if name := t.Name(); name != "" && !seen[name] {
+		if name := t.Name(); name != "" {
+			// A named struct is walked exactly once. Returning early on the
+			// second encounter both dedups output AND makes Collect cycle-safe:
+			// a self-referential type (Node{ Children []*Node }) would otherwise
+			// recurse into its own fields forever. Its reachable types were
+			// already collected on the first visit.
+			if seen[name] {
+				return
+			}
 			seen[name] = true
 			*out = append(*out, TypeDecl{Name: name, Decl: RenderDecl(name, t)})
 		}
@@ -127,7 +140,7 @@ func sovTagHasHeader(sov string) bool {
 	if sov == "" {
 		return false
 	}
-	for _, tok := range strings.Split(sov, ",") {
+	for tok := range strings.SplitSeq(sov, ",") {
 		if strings.HasPrefix(strings.TrimSpace(tok), "header=") {
 			return true
 		}
@@ -154,19 +167,29 @@ func structFields(t reflect.Type) []fieldInfo {
 		if name == "" {
 			name = sf.Name
 		}
-		optional := strings.Contains(tag, "omitempty") || sf.Type.Kind() == reflect.Ptr
+		optional := strings.Contains(tag, "omitempty") || sf.Type.Kind() == reflect.Pointer
 		out = append(out, fieldInfo{Name: name, Type: sf.Type, Optional: optional})
 	}
 	return out
 }
 
 func render(t reflect.Type) string {
+	return renderSeen(t, map[reflect.Type]bool{})
+}
+
+// renderSeen is render with a PATH-SCOPED set of the struct types currently being
+// expanded, so a self-referential type (e.g. a tree node with a []*Self field) doesn't
+// recurse forever. Since tsrender INLINES every struct as an anonymous object type, a
+// recursive type can't be expressed structurally — on a cycle we emit "unknown" (a valid
+// TS type) and stop. `seen` is entered/exited per struct, so a type reused across sibling
+// branches (a DAG, not a cycle) still renders its real shape each time.
+func renderSeen(t reflect.Type, seen map[reflect.Type]bool) string {
 	if t == nil {
 		return "unknown"
 	}
 	switch t.Kind() {
-	case reflect.Ptr:
-		return render(t.Elem())
+	case reflect.Pointer:
+		return renderSeen(t.Elem(), seen)
 	case reflect.String:
 		return "string"
 	case reflect.Bool:
@@ -179,9 +202,9 @@ func render(t reflect.Type) string {
 		if isJSONRawMessage(t) {
 			return "unknown"
 		}
-		return render(t.Elem()) + "[]"
+		return renderSeen(t.Elem(), seen) + "[]"
 	case reflect.Map:
-		return fmt.Sprintf("Record<%s, %s>", render(t.Key()), render(t.Elem()))
+		return fmt.Sprintf("Record<%s, %s>", renderSeen(t.Key(), seen), renderSeen(t.Elem(), seen))
 	case reflect.Interface:
 		return "unknown"
 	case reflect.Struct:
@@ -192,6 +215,10 @@ func render(t reflect.Type) string {
 		if t.NumField() == 0 {
 			return "{}"
 		}
+		if seen[t] {
+			return "unknown" // recursive type — can't inline; break the cycle
+		}
+		seen[t] = true
 		fields := structFields(t)
 		parts := make([]string, 0, len(fields))
 		for _, f := range fields {
@@ -199,8 +226,9 @@ func render(t reflect.Type) string {
 			if f.Optional {
 				marker = "?"
 			}
-			parts = append(parts, fmt.Sprintf("%s%s: %s", f.Name, marker, render(f.Type)))
+			parts = append(parts, fmt.Sprintf("%s%s: %s", f.Name, marker, renderSeen(f.Type, seen)))
 		}
+		delete(seen, t)
 		return "{ " + strings.Join(parts, "; ") + " }"
 	default:
 		return "unknown"
@@ -216,7 +244,7 @@ func isJSONRawMessage(t reflect.Type) bool {
 	if t == nil {
 		return false
 	}
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 && t.Name() == "RawMessage"
