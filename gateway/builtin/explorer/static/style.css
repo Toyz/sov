@@ -213,7 +213,7 @@ body {
 .field-desc { color: var(--dim); font-size: 11.5px; margin-top: 2px; white-space: normal; }
 .type-ref { color: var(--accent); }
 .row-deprecated .field-name { text-decoration: line-through; color: var(--faint); }
-.required { color: var(--red); font-size: 10.5px; }
+.required { color: var(--red); font-size: 9.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; }
 .flag-muted { color: var(--faint); font-size: 10.5px; }
 .deprecated { color: var(--amber); font-size: 10.5px; }
 .src-badge { color: var(--violet); }
@@ -238,12 +238,21 @@ body {
 }
 .detail textarea:focus { border-color: var(--line-2); }
 
-.header-params-head { margin: 12px 0 6px; font-size: 11px; color: var(--faint); }
-.header-inputs { display: flex; flex-direction: column; gap: 6px; }
-.header-input { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
-.header-name { color: var(--violet); }
-.header-input input { font: inherit; font-size: 12px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; outline: none; }
-.header-input input:focus { border-color: var(--line-2); }
+.header-params-head { margin: 16px 0 8px; font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.header-inputs { display: flex; flex-direction: column; gap: 11px; }
+.header-input { display: flex; flex-direction: column; gap: 5px; }
+.header-input-top { display: flex; align-items: baseline; gap: 8px; }
+.header-name { color: var(--violet); font-family: var(--mono); font-size: 12px; }
+.header-type { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
+.header-input-top .required { margin-left: auto; }
+.header-input input {
+  font: inherit; font-size: 12.5px; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; outline: none;
+  transition: border-color .1s;
+}
+.header-input input::placeholder { color: var(--faint); font-family: var(--mono); }
+.header-input input:focus { border-color: var(--accent); }
+.header-hint { font-size: 11px; color: var(--faint); }
 
 .execute-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
 .execute {
@@ -262,11 +271,30 @@ body {
 .status-pill.ok  { color: var(--green); }
 .status-pill.warn{ color: var(--amber); }
 .status-pill.err { color: var(--red); }
-.timing { color: var(--faint); font-size: 11px; }
+.timing { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+.timing.fast { color: var(--green); }
+.timing.med  { color: var(--dim); }
+.timing.slow { color: var(--amber); }
 
 .copy-btn { font: inherit; font-size: 10.5px; color: var(--faint); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 0 7px; line-height: 17px; cursor: pointer; transition: color .1s, border-color .1s; }
 .copy-btn:hover { color: var(--text); border-color: var(--line-2); }
 .copy-btn.copied { color: var(--green); border-color: var(--line-2); }
+.copy-btn.active { color: var(--text); border-color: var(--line-2); }
+
+/* request / response headers (optional, toggled) */
+.headers-box { margin-top: 8px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; font-size: 12px; }
+.hgroup + .hgroup { border-top: 1px solid var(--line); }
+.hgroup-title { padding: 5px 10px; background: var(--bg-elev); color: var(--faint); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
+.hrow { display: flex; gap: 10px; padding: 3px 10px; align-items: baseline; }
+.hrow:nth-child(even) { background: var(--panel-2); }
+.hk { color: var(--violet); min-width: 34%; word-break: break-all; }
+.hv { color: var(--text); word-break: break-all; }
+.hv.sensitive { cursor: pointer; color: var(--dim); }
+.hv.sensitive::after { content: " reveal"; color: var(--faint); font-size: 10px; }
+.hv.sensitive:hover { color: var(--accent); }
+.hv.sensitive.revealed { color: var(--text); }
+.hv.sensitive.revealed::after { content: " hide"; }
+.hempty { color: var(--faint); font-style: italic; }
 
 .detail pre {
   margin: 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
@@ -281,6 +309,39 @@ body {
 .j-num { color: var(--j-num); }
 .j-bool { color: var(--j-bool); }
 .j-null { color: var(--j-null); }
+
+/* ---- syntax tokens (sovx.highlighter output) ------------------------ */
+/* Dashboard-shipped colors for the standard token classes; an extension can
+   register its own cls and color it from its ExplorerAssets CSS. */
+.code-block { white-space: pre; }
+.code-block.err { color: var(--red); }
+
+/* ---- batched codegen card (tabbed by language) ---------------------- */
+.codegen-group { margin-top: 16px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.codegen-tabs { display: flex; gap: 3px; padding: 6px 8px; background: var(--bg-elev); border-bottom: 1px solid var(--line); }
+.codegen-tab {
+  font: inherit; font-size: 11.5px; color: var(--faint); background: transparent;
+  border: 1px solid transparent; border-radius: 5px; padding: 3px 11px; cursor: pointer;
+  transition: color .1s, background .1s, border-color .1s;
+}
+.codegen-tab:hover { color: var(--dim); }
+.codegen-tab.active { color: var(--text); background: var(--panel-2); border-color: var(--line-2); }
+.codegen-body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.codegen-sub { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.codegen-sub-head {
+  display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+  background: var(--panel-2); color: var(--faint);
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+}
+.codegen-sub-head .spacer { flex: 1; }
+.codegen-sub pre { margin: 0; border: none; border-radius: 0; min-height: 0; background: var(--panel); }
+.tok-kw      { color: var(--violet); }
+.tok-str     { color: var(--j-str); }
+.tok-num     { color: var(--j-num); }
+.tok-comment { color: var(--faint); font-style: italic; }
+.tok-fn      { color: var(--accent); }
+.tok-type    { color: var(--j-key); }
+.tok-punct   { color: var(--dim); }
 
 /* ---- typescript blocks ---------------------------------------------- */
 .ts-block { margin-top: 20px; }

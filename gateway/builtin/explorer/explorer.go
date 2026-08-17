@@ -114,13 +114,13 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 	if strings.HasSuffix(req.Path, "/extensions.json") {
 		return &gateway.Response{
 			Status: http.StatusOK,
-			Header: gateway.Header{"Content-Type": "application/json"},
+			Header: gateway.Header{"Content-Type": "application/json", "Cache-Control": "no-cache"},
 			Body:   explorerManifest(p.prefix, p.collectAssets()),
 		}
 	}
 	if strings.HasPrefix(req.Path, p.prefix+"/ext/") {
 		ct, body, status := serveExtAsset(req.Path, p.prefix, p.collectAssets())
-		return &gateway.Response{Status: status, Header: gateway.Header{"Content-Type": ct}, Body: body}
+		return &gateway.Response{Status: status, Header: gateway.Header{"Content-Type": ct, "Cache-Control": "no-cache"}, Body: body}
 	}
 
 	header := gateway.Header{}
@@ -133,9 +133,12 @@ func (p *Plugin) ServeRoute(ctx context.Context, req *gateway.Request) *gateway.
 		Header: header,
 	})
 	ct, body, status := serveUI(req.Path, p.prefix, introResp.Body)
+	// no-cache: revalidate every load so a rebuilt explorer never serves stale
+	// JS/CSS/HTML from a browser heuristic cache (there is no content hash in the
+	// asset URLs). Cheap — the assets are embedded and tiny.
 	return &gateway.Response{
 		Status: status,
-		Header: gateway.Header{"Content-Type": ct},
+		Header: gateway.Header{"Content-Type": ct, "Cache-Control": "no-cache"},
 		Body:   body,
 	}
 }
