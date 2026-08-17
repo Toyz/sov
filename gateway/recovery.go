@@ -115,20 +115,15 @@ func (g *Gateway) safeHook(hookName, pluginName string, fn func() error) (overri
 // order; first non-nil override wins. Falls back to the default
 // Logger-backed handler when no plugin handlers are registered.
 func (g *Gateway) dispatchRecovery(f HookFailure) *Response {
-	snap := g.snapshotPlugins()
+	handlers := PluginsImplementing[RecoveryHandler](g)
+	if len(handlers) == 0 {
+		return g.defaultRecovery.HandleHookFailure(f)
+	}
 	var override *Response
-	found := false
-	for _, e := range snap {
-		if e.recoveryHandler == nil {
-			continue
-		}
-		found = true
-		if r := e.recoveryHandler.HandleHookFailure(f); r != nil && override == nil {
+	for _, h := range handlers {
+		if r := h.HandleHookFailure(f); r != nil && override == nil {
 			override = r
 		}
-	}
-	if !found {
-		return g.defaultRecovery.HandleHookFailure(f)
 	}
 	return override
 }

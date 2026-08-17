@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strings"
 
 	"github.com/Toyz/sov/rpc"
 )
@@ -35,6 +34,11 @@ type TypeDescriptor struct {
 	// Consumers are services that use this type without owning it (as a
 	// request param or a nested reference). Sorted, deduped.
 	Consumers []string `json:"consumers,omitempty"`
+	// Shared is true when MORE THAN ONE service returns this type AND they all
+	// agree on its shape (one ShapeHash). That is a legitimately shared domain
+	// model, not a boundary smell — Owners lists the co-owners. Contrast DRIFT:
+	// same name, DIFFERENT shapes, which lands in IntrospectReport.CrossRefs.
+	Shared bool `json:"shared,omitempty"`
 }
 
 // TypeUse records one appearance of a TypeDescriptor on a method.
@@ -50,6 +54,19 @@ type TypeUse struct {
 type TypeVariants struct {
 	Name     string        `json:"name"`
 	Variants []TypeVariant `json:"variants"`
+	// Diff is the per-field breakdown across the variants: for every field name
+	// that appears in ANY variant, its schema type in each variant (aligned to
+	// Variants order; "" = the field is absent from that variant). Field.Diverges
+	// marks the rows that actually differ — that IS the drift, spelled out, so a
+	// reader sees exactly which fields moved instead of just "these shapes differ".
+	Diff []FieldDivergence `json:"diff,omitempty"`
+}
+
+// FieldDivergence is one row of a drift diff: a field's type across the variants.
+type FieldDivergence struct {
+	Field    string   `json:"field"`    // JSON field name
+	Types    []string `json:"types"`    // schema type per variant, aligned to Variants; "" = absent
+	Diverges bool     `json:"diverges"` // true when not identical across all variants
 }
 
 // TypeVariant is one shape of a same-named type.
@@ -182,7 +199,7 @@ func buildTypeCatalog(report *IntrospectReport) {
 			variants = append(variants, *v)
 		}
 		sort.Slice(variants, func(i, j int) bool { return variants[i].ShapeHash < variants[j].ShapeHash })
-		report.CrossRefs[name] = TypeVariants{Name: name, Variants: variants}
+		report.CrossRefs[name] = TypeVariants{Name: name, Variants: variants, Diff: variantDiff(variants)}
 	}
 
 	// Sort each TypeDescriptor.UsedBy for deterministic output.
@@ -235,10 +252,14 @@ func inferOwnership(report *IntrospectReport) {
 		case 1:
 			td.Owner = owners[0]
 		default:
-			td.Owner = "" // ambiguous single-owner; the full set lives in td.Owners
-			report.BoundaryWarnings = append(report.BoundaryWarnings,
-				fmt.Sprintf("type %q is returned by %d services (%s) — data ownership is ambiguous",
-					name, len(owners), strings.Join(owners, ", ")))
+			// Multiple producers. If they all agree on ONE shape it is a shared
+			// domain model — info, not a smell (Shared, no warning). If the
+			// shapes DIVERGE the type is already in CrossRefs (drift) and that is
+			// where the loud signal lives, so we don't double-warn here either.
+			td.Owner = "" // no single owner; the co-owners are in td.Owners
+			if _, drifted := report.CrossRefs[name]; !drifted {
+				td.Shared = true
+			}
 		}
 		// Consumers = users that don't PRODUCE the type (excludes every
 		// producer, not just the single Owner — so an ambiguous type's
@@ -254,6 +275,45 @@ func inferOwnership(report *IntrospectReport) {
 		report.Types[name] = td
 	}
 	sort.Strings(report.BoundaryWarnings)
+}
+
+// variantDiff builds the per-field drift breakdown across variants: every field
+// name that appears in any variant, with its schema type per variant (aligned to
+// the variants slice; "" = absent) and whether it diverges. This is the
+// "what actually differs" view the raw variant list lacks.
+func variantDiff(variants []TypeVariant) []FieldDivergence {
+	names := make([]string, 0)
+	seen := map[string]bool{}
+	perVariant := make([]map[string]string, len(variants))
+	for i, v := range variants {
+		m := make(map[string]string, len(v.Fields))
+		for _, f := range v.Fields {
+			ty := f.SchemaType
+			if f.TypeName != "" {
+				ty = ty + " " + f.TypeName // finer diff: a []Foo vs []Bar reads as different
+			}
+			m[f.JSONName] = ty
+			if !seen[f.JSONName] {
+				seen[f.JSONName] = true
+				names = append(names, f.JSONName)
+			}
+		}
+		perVariant[i] = m
+	}
+	sort.Strings(names)
+	out := make([]FieldDivergence, 0, len(names))
+	for _, n := range names {
+		types := make([]string, len(variants))
+		diverges := false
+		for i := range variants {
+			types[i] = perVariant[i][n] // "" when this variant lacks the field
+			if types[i] != types[0] {
+				diverges = true
+			}
+		}
+		out = append(out, FieldDivergence{Field: n, Types: types, Diverges: diverges})
+	}
+	return out
 }
 
 // hashShape returns a deterministic hash of a field list. Sorts by

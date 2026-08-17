@@ -9,12 +9,8 @@ import "log/slog"
 //
 //	gw.Log().Info("plugin loaded", "name", p.PluginName())
 func (g *Gateway) Log() Logger {
-	g.muPlugins.RLock()
-	defer g.muPlugins.RUnlock()
-	for _, e := range g.plugins {
-		if e.logger != nil {
-			return e.logger
-		}
+	if loggers := PluginsImplementing[Logger](g); len(loggers) > 0 {
+		return loggers[0] // first registered logger wins
 	}
 	return defaultLogger{l: slog.Default()}
 }

@@ -33,17 +33,6 @@ type pluginRoute struct {
 	priority int
 }
 
-// snapshotPlugins returns a clone of g.plugins taken under the read
-// lock. The fan-out helpers iterate the clone so a concurrent Use()
-// append never tears the iteration. Callers that only need a presence
-// check (headerClaimed, hasSealVerifier, …) hold the RLock directly
-// instead of cloning.
-func (g *Gateway) snapshotPlugins() []*pluginEntry {
-	g.muPlugins.RLock()
-	defer g.muPlugins.RUnlock()
-	return append([]*pluginEntry(nil), g.plugins...)
-}
-
 // matches reports whether this route's pattern matches path (subtree = prefix,
 // else exact).
 func (r pluginRoute) matches(path string) bool {
@@ -105,13 +94,9 @@ func pluginRoutesExcept(snap []pluginRoute, path string, exceptIdx int) []plugin
 // Soft severity — a panicking injector logs + skips. Subject must
 // stay sealable so the request still proceeds.
 func (g *Gateway) callHeaderInjectors(ctx context.Context, req *Request, hreq *http.Request) {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.headerInjector == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("HeaderInjector", e.name, func() error {
-			return e.headerInjector.InjectHeaders(ctx, req, hreq)
+	for _, h := range PluginsImplementing[HeaderInjector](g) {
+		_, _, _ = g.safeHook("HeaderInjector", hookName(h), func() error {
+			return h.InjectHeaders(ctx, req, hreq)
 		})
 	}
 }
@@ -121,14 +106,10 @@ func (g *Gateway) callHeaderInjectors(ctx context.Context, req *Request, hreq *h
 // response (e.g. cors OPTIONS preflight). Only panics route through
 // the recovery handler; returned errors don't.
 func (g *Gateway) callHeaderParsers(req *Request) *rpc.Error {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.headerParser == nil {
-			continue
-		}
+	for _, h := range PluginsImplementing[HeaderParser](g) {
 		var firstErr *rpc.Error
-		_, _, _ = g.safeHook("HeaderParser", e.name, func() error {
-			firstErr = e.headerParser.ParseHeaders(req)
+		_, _, _ = g.safeHook("HeaderParser", hookName(h), func() error {
+			firstErr = h.ParseHeaders(req)
 			// Return nil so the recovery handler does NOT see the
 			// short-circuit as a failure. Only panics propagate.
 			return nil
@@ -143,13 +124,9 @@ func (g *Gateway) callHeaderParsers(req *Request) *rpc.Error {
 // callAuthTranslators runs after the auth middleware resolves Claims.
 // Soft — translation skipped if plugin panics.
 func (g *Gateway) callAuthTranslators(req *Request, claims *Claims) {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.authTranslator == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("AuthTranslator", e.name, func() error {
-			return e.authTranslator.TranslateAuth(req, claims)
+	for _, h := range PluginsImplementing[AuthTranslator](g) {
+		_, _, _ = g.safeHook("AuthTranslator", hookName(h), func() error {
+			return h.TranslateAuth(req, claims)
 		})
 	}
 }
@@ -157,13 +134,9 @@ func (g *Gateway) callAuthTranslators(req *Request, claims *Claims) {
 // callDispatchHooks fans a post-handler event to every DispatchHook.
 // Soft — hook is post-response; failure can never break the wire.
 func (g *Gateway) callDispatchHooks(ev DispatchEvent) {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.dispatchHook == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("DispatchHook", e.name, func() error {
-			return e.dispatchHook.OnDispatch(ev)
+	for _, h := range PluginsImplementing[DispatchHook](g) {
+		_, _, _ = g.safeHook("DispatchHook", hookName(h), func() error {
+			return h.OnDispatch(ev)
 		})
 	}
 }
@@ -171,13 +144,9 @@ func (g *Gateway) callDispatchHooks(ev DispatchEvent) {
 // callBootValidators runs once at ListenAndServe entry. Halt — first
 // failure aborts startup with a wrapped error.
 func (g *Gateway) callBootValidators() error {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.bootValidator == nil {
-			continue
-		}
-		_, bootErr, _ := g.safeHook("BootValidator", e.name, func() error {
-			return e.bootValidator.ValidateBoot(g)
+	for _, h := range PluginsImplementing[BootValidator](g) {
+		_, bootErr, _ := g.safeHook("BootValidator", hookName(h), func() error {
+			return h.ValidateBoot(g)
 		})
 		if bootErr != nil {
 			return bootErr
@@ -189,13 +158,9 @@ func (g *Gateway) callBootValidators() error {
 // callLifecycleStart fires OnStart on every LifecycleHook in
 // registration order. Halt — first failure aborts startup.
 func (g *Gateway) callLifecycleStart(ctx context.Context) error {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.lifecycleHook == nil {
-			continue
-		}
-		_, bootErr, _ := g.safeHook("LifecycleHook.OnStart", e.name, func() error {
-			return e.lifecycleHook.OnStart(ctx)
+	for _, h := range PluginsImplementing[LifecycleHook](g) {
+		_, bootErr, _ := g.safeHook("LifecycleHook.OnStart", hookName(h), func() error {
+			return h.OnStart(ctx)
 		})
 		if bootErr != nil {
 			return bootErr
@@ -207,14 +172,11 @@ func (g *Gateway) callLifecycleStart(ctx context.Context) error {
 // callLifecycleStop fires OnStop in REVERSE order. Soft — shutdown
 // is best-effort; we log and keep tearing down.
 func (g *Gateway) callLifecycleStop(ctx context.Context) {
-	snap := g.snapshotPlugins()
-	for i := len(snap) - 1; i >= 0; i-- {
-		e := snap[i]
-		if e.lifecycleHook == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("LifecycleHook.OnStop", e.name, func() error {
-			return e.lifecycleHook.OnStop(ctx)
+	hooks := PluginsImplementing[LifecycleHook](g)
+	for i := len(hooks) - 1; i >= 0; i-- {
+		h := hooks[i]
+		_, _, _ = g.safeHook("LifecycleHook.OnStop", hookName(h), func() error {
+			return h.OnStop(ctx)
 		})
 	}
 }
@@ -224,14 +186,10 @@ func (g *Gateway) callLifecycleStop(ctx context.Context) {
 // role-takeover and federation-preemption paths via the Conflict
 // discriminator on c.
 func (g *Gateway) policyAllowsMeshConflict(current, candidate string, c Conflict) bool {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.meshConflict == nil {
-			continue
-		}
+	for _, h := range PluginsImplementing[MeshConflictPolicy](g) {
 		var allow bool
-		_, _, _ = g.safeHook("MeshConflictPolicy.AllowMeshConflict", e.name, func() error {
-			allow = e.meshConflict.AllowMeshConflict(current, candidate, c)
+		_, _, _ = g.safeHook("MeshConflictPolicy.AllowMeshConflict", hookName(h), func() error {
+			allow = h.AllowMeshConflict(current, candidate, c)
 			return nil
 		})
 		if allow {
@@ -246,13 +204,9 @@ func (g *Gateway) policyAllowsMeshConflict(current, candidate string, c Conflict
 // preemption map cleanup, audit log). Plugins with nothing to clean
 // up no-op.
 func (g *Gateway) consumeMeshConflict(name string, c Conflict) {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.meshConflict == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("MeshConflictPolicy.ConsumeConflict", e.name, func() error {
-			e.meshConflict.ConsumeConflict(name, c)
+	for _, h := range PluginsImplementing[MeshConflictPolicy](g) {
+		_, _, _ = g.safeHook("MeshConflictPolicy.ConsumeConflict", hookName(h), func() error {
+			h.ConsumeConflict(name, c)
 			return nil
 		})
 	}
@@ -262,11 +216,9 @@ func (g *Gateway) consumeMeshConflict(name string, c Conflict) {
 // has claimed the canonical name. NetHTTPServer's strip consults this
 // to preserve plugin-owned headers (e.g. mesh-secret's X-Sov-Register-Sig).
 func (g *Gateway) headerClaimed(canonicalName string) bool {
-	g.muPlugins.RLock()
-	defer g.muPlugins.RUnlock()
-	for _, e := range g.plugins {
-		for _, h := range e.headerClaims {
-			if h == canonicalName {
+	for _, hc := range PluginsImplementing[HeaderClaimer](g) {
+		for _, raw := range hc.ClaimedHeaders() {
+			if raw != "" && http.CanonicalHeaderKey(raw) == canonicalName {
 				return true
 			}
 		}
@@ -275,14 +227,10 @@ func (g *Gateway) headerClaimed(canonicalName string) bool {
 }
 
 func (g *Gateway) upstreamTrusted(headers map[string][]string) bool {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.upstreamTrust == nil {
-			continue
-		}
+	for _, h := range PluginsImplementing[UpstreamTrustPolicy](g) {
 		var trust bool
-		_, _, _ = g.safeHook("UpstreamTrustPolicy", e.name, func() error {
-			trust = e.upstreamTrust.TrustUpstream(headers)
+		_, _, _ = g.safeHook("UpstreamTrustPolicy", hookName(h), func() error {
+			trust = h.TrustUpstream(headers)
 			return nil
 		})
 		if !trust {
@@ -293,46 +241,30 @@ func (g *Gateway) upstreamTrusted(headers map[string][]string) bool {
 }
 
 func (g *Gateway) sealValid(headers map[string][]string) bool {
-	snap := g.snapshotPlugins()
-	any := false
-	for _, e := range snap {
-		if e.sealVerifier == nil {
-			continue
-		}
-		any = true
+	verifiers := PluginsImplementing[SealVerifier](g)
+	for _, h := range verifiers {
 		var ok bool
-		_, _, _ = g.safeHook("SealVerifier", e.name, func() error {
-			ok = e.sealVerifier.VerifySeal(headers)
+		_, _, _ = g.safeHook("SealVerifier", hookName(h), func() error {
+			ok = h.VerifySeal(headers)
 			return nil
 		})
 		if ok {
 			return true
 		}
 	}
-	return !any
+	return len(verifiers) == 0
 }
 
 func (g *Gateway) hasSealVerifier() bool {
-	g.muPlugins.RLock()
-	defer g.muPlugins.RUnlock()
-	for _, e := range g.plugins {
-		if e.sealVerifier != nil {
-			return true
-		}
-	}
-	return false
+	return len(PluginsImplementing[SealVerifier](g)) > 0
 }
 
 // callResponseInterceptors. Soft — interceptor failure is logged;
 // response keeps whatever shape it had before.
 func (g *Gateway) callResponseInterceptors(req *Request, resp *Response) {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.respInterceptor == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("ResponseInterceptor", e.name, func() error {
-			return e.respInterceptor.InterceptResponse(req, resp)
+	for _, h := range PluginsImplementing[ResponseInterceptor](g) {
+		_, _, _ = g.safeHook("ResponseInterceptor", hookName(h), func() error {
+			return h.InterceptResponse(req, resp)
 		})
 	}
 }
@@ -340,13 +272,9 @@ func (g *Gateway) callResponseInterceptors(req *Request, resp *Response) {
 // callContextContributors. Soft — missing metadata is degraded but
 // not broken.
 func (g *Gateway) callContextContributors(ctx *rpc.Context, req *Request) {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.ctxContributor == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("ContextContributor", e.name, func() error {
-			return e.ctxContributor.ContributeContext(ctx, req)
+	for _, h := range PluginsImplementing[ContextContributor](g) {
+		_, _, _ = g.safeHook("ContextContributor", hookName(h), func() error {
+			return h.ContributeContext(ctx, req)
 		})
 	}
 }
@@ -360,13 +288,9 @@ func (g *Gateway) callContextContributors(ctx *rpc.Context, req *Request) {
 // decorate (local) or fan out (remote) based on the cascade headers
 // it receives.
 func (g *Gateway) callIntrospectContributors(ctx context.Context, report *IntrospectReport, trace string, visited []string) {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.introContributor == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("IntrospectContributor", e.name, func() error {
-			return e.introContributor.ContributeIntrospect(ctx, report, trace, visited)
+	for _, h := range PluginsImplementing[IntrospectContributor](g) {
+		_, _, _ = g.safeHook("IntrospectContributor", hookName(h), func() error {
+			return h.ContributeIntrospect(ctx, report, trace, visited)
 		})
 	}
 }
@@ -374,13 +298,9 @@ func (g *Gateway) callIntrospectContributors(ctx context.Context, report *Intros
 // callHealthAggregators. Soft — failed aggregator leaves local
 // health-only report.
 func (g *Gateway) callHealthAggregators(ctx context.Context, report *HealthReport) {
-	snap := g.snapshotPlugins()
-	for _, e := range snap {
-		if e.healthAggregator == nil {
-			continue
-		}
-		_, _, _ = g.safeHook("HealthAggregator", e.name, func() error {
-			return e.healthAggregator.AggregateHealth(ctx, report)
+	for _, h := range PluginsImplementing[HealthAggregator](g) {
+		_, _, _ = g.safeHook("HealthAggregator", hookName(h), func() error {
+			return h.AggregateHealth(ctx, report)
 		})
 	}
 }
@@ -389,16 +309,7 @@ func (g *Gateway) callHealthAggregators(ctx context.Context, report *HealthRepor
 // gateway's dispatch path. The outer handler reads resp.Mode to label
 // where the call actually ran.
 func (g *Gateway) recordDispatchEventWithMode(router, method, path string, status int, started time.Time, subject, errorCode, batchID, mode, remoteIP, requestID string) {
-	g.muPlugins.RLock()
-	any := false
-	for _, e := range g.plugins {
-		if e.dispatchHook != nil {
-			any = true
-			break
-		}
-	}
-	g.muPlugins.RUnlock()
-	if !any {
+	if len(PluginsImplementing[DispatchHook](g)) == 0 {
 		return
 	}
 	g.callDispatchHooks(DispatchEvent{

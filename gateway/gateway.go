@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/signal"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -75,6 +76,10 @@ type Gateway struct {
 	plugins         []*pluginEntry
 	pluginRoutes    []pluginRoute
 	defaultRecovery *defaultRecoveryHandler
+	// hookCache memoizes PluginsImplementing[T] results by interface type so the
+	// dispatch fan-outs don't re-type-assert every plugin per request. Guarded by
+	// muPlugins; cleared whenever a plugin is added. nil until first use.
+	hookCache map[reflect.Type][]any
 
 	muStart sync.Mutex
 }

@@ -28,20 +28,14 @@ type ReadinessContributor interface {
 // callReadinessContributors returns the first contributor's not-ready error, or
 // nil when all report ready. A panicking contributor is treated as not ready.
 func (g *Gateway) callReadinessContributors(ctx context.Context) error {
-	g.muPlugins.RLock()
-	snap := g.plugins
-	g.muPlugins.RUnlock()
-	for _, e := range snap {
-		if e.readinessContrib == nil {
-			continue
-		}
+	for _, h := range PluginsImplementing[ReadinessContributor](g) {
 		var rerr error
-		_, _, failed := g.safeHook("ReadinessContributor", e.name, func() error {
-			rerr = e.readinessContrib.Ready(ctx)
+		_, _, failed := g.safeHook("ReadinessContributor", hookName(h), func() error {
+			rerr = h.Ready(ctx)
 			return nil // a not-ready is data, not a hook failure — capture it
 		})
 		if failed {
-			return fmt.Errorf("readiness contributor %q panicked", e.name)
+			return fmt.Errorf("readiness contributor %q panicked", hookName(h))
 		}
 		if rerr != nil {
 			return rerr
