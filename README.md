@@ -20,6 +20,10 @@ This README is the read-me-first. Going deeper:
 - [examples/chirp/polyglot/](examples/chirp/polyglot/) — a non-Go (Python) pod that joins the mesh as a first-class member. Producer polyglot, proven.
 - [BENCHMARKS.md](BENCHMARKS.md) — the cost of PEMM: in-process ≈ µs, remote = 1 RTT, batch coalesces N→1.
 
+## In the wild
+
+[**mininote.ink**](https://mininote.ink) — a full production app built on sov, not a demo. It uses the same `/rpc` contract, gateway, and introspection this README describes as its real backend. Dogfood proof that the sovereign-monolith → SaaS-mesh story holds for a shipping product.
+
 ## Packages
 
 | Package | Role |
